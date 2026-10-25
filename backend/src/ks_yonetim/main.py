@@ -10,6 +10,7 @@ from .api import ApiError, api_error_handler, router, validation_error_handler
 from .backup import BackupError, backup_manager
 from .database import ensure_schema
 from .operations import router as operations_router
+from .spreadsheet_io import router as spreadsheet_router
 
 
 @asynccontextmanager
@@ -34,3 +35,4 @@ app.add_exception_handler(ApiError, api_error_handler)
 app.add_exception_handler(RequestValidationError, validation_error_handler)
 app.include_router(router)
 app.include_router(operations_router)
+app.include_router(spreadsheet_router)

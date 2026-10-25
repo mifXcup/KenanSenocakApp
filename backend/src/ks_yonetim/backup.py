@@ -19,7 +19,9 @@ from .config import get_settings
 from .database import SessionLocal, engine
 from .models import AuditLog
 
-BACKUP_NAME_PATTERN = re.compile(r"^ks-\d{8}-\d{6}-\d{6}-(automatic|manual|pre_restore)\.db$")
+BACKUP_NAME_PATTERN = re.compile(
+    r"^ks-\d{8}-\d{6}-\d{6}-(automatic|manual|pre_restore|pre_import)\.db$"
+)
 AUTOMATIC_RETENTION = 30
 
 
@@ -163,7 +165,7 @@ class BackupManager:
             destination.commit()
 
     def create(self, kind: str = "manual") -> BackupMetadata:
-        if kind not in {"automatic", "manual", "pre_restore"}:
+        if kind not in {"automatic", "manual", "pre_restore", "pre_import"}:
             raise BackupError("invalid_backup_kind", "Geçersiz yedek türü.")
         with self._lock:
             self._in_progress = True

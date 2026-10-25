@@ -476,3 +476,37 @@ class ProjectCostSummary(BaseModel):
     budget_variance_kurus: int | None
     contract_amount_kurus: int | None
     estimated_profit_kurus: int | None
+
+
+class SpreadsheetFilePayload(BaseModel):
+    file_name: str = Field(min_length=1, max_length=255)
+    content_base64: str = Field(min_length=8)
+
+
+class SpreadsheetFileResponse(BaseModel):
+    file_name: str
+    mime_type: str
+    content_base64: str
+
+
+class ImportIssue(BaseModel):
+    row: int
+    field: str | None = None
+    message: str
+
+
+class ImportPreview(BaseModel):
+    kind: str
+    total_rows: int
+    valid_rows: int
+    invalid_rows: int
+    duplicate_rows: int
+    issues: list[ImportIssue]
+    sample: list[dict]
+
+
+class ImportCommitResult(BaseModel):
+    kind: str
+    created: int
+    skipped_duplicates: int
+    backup_id: str
