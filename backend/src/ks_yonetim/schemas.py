@@ -6,7 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from .models import MovementType, RecordStatus, TrackingMode
+from .models import EmployeePaymentType, ExpenseCategory, MovementType, RecordStatus, TrackingMode
 
 
 class OrmModel(BaseModel):
@@ -367,3 +367,112 @@ class BackupRestoreResult(BaseModel):
     restored_backup: BackupRead
     pre_restore_backup: BackupRead
     restart_required: bool = True
+
+
+class EmployeeCreate(BaseModel):
+    name: str = Field(min_length=2, max_length=180)
+    phone: str | None = Field(default=None, max_length=40)
+    role: str | None = Field(default=None, max_length=120)
+    daily_rate_kurus: int | None = Field(default=None, ge=0)
+    note: str | None = Field(default=None, max_length=2000)
+
+
+class EmployeeRead(OrmModel):
+    id: str
+    name: str
+    phone: str | None
+    role: str | None
+    daily_rate_kurus: int | None
+    note: str | None
+    status: RecordStatus
+
+
+class SiteCreate(BaseModel):
+    project_id: str | None = None
+    name: str = Field(min_length=2, max_length=180)
+    address: str | None = Field(default=None, max_length=2000)
+    note: str | None = Field(default=None, max_length=2000)
+
+
+class SiteRead(OrmModel):
+    id: str
+    project_id: str | None
+    name: str
+    address: str | None
+    note: str | None
+    status: RecordStatus
+
+
+class WorkLogCreate(BaseModel):
+    employee_id: str
+    project_id: str | None = None
+    site_id: str | None = None
+    work_date: date
+    hours: Decimal = Field(gt=0, le=24, decimal_places=2)
+    amount_kurus: int | None = Field(default=None, ge=0)
+    note: str | None = Field(default=None, max_length=2000)
+
+
+class WorkLogRead(OrmModel):
+    id: str
+    employee_id: str
+    project_id: str | None
+    site_id: str | None
+    work_date: date
+    hours: Decimal
+    amount_kurus: int
+    note: str | None
+    status: RecordStatus
+
+
+class EmployeePaymentCreate(BaseModel):
+    employee_id: str
+    payment_date: date
+    amount_kurus: int = Field(gt=0)
+    payment_type: EmployeePaymentType
+    note: str | None = Field(default=None, max_length=2000)
+
+
+class EmployeePaymentRead(OrmModel):
+    id: str
+    employee_id: str
+    payment_date: date
+    amount_kurus: int
+    payment_type: EmployeePaymentType
+    note: str | None
+    status: RecordStatus
+
+
+class ProjectExpenseCreate(BaseModel):
+    project_id: str
+    site_id: str | None = None
+    expense_date: date
+    category: ExpenseCategory
+    amount_kurus: int = Field(gt=0)
+    description: str | None = Field(default=None, max_length=2000)
+
+
+class ProjectExpenseRead(OrmModel):
+    id: str
+    project_id: str
+    site_id: str | None
+    expense_date: date
+    category: ExpenseCategory
+    amount_kurus: int
+    description: str | None
+    status: RecordStatus
+
+
+class ProjectCostSummary(BaseModel):
+    project_id: str
+    purchase_kurus: int
+    labor_kurus: int
+    shipping_kurus: int
+    installation_kurus: int
+    site_kurus: int
+    other_kurus: int
+    total_cost_kurus: int
+    budget_kurus: int | None
+    budget_variance_kurus: int | None
+    contract_amount_kurus: int | None
+    estimated_profit_kurus: int | None

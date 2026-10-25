@@ -40,6 +40,18 @@ class MovementType(str, enum.Enum):
     ADJUSTMENT = "adjustment"
 
 
+class ExpenseCategory(str, enum.Enum):
+    SHIPPING = "shipping"
+    INSTALLATION = "installation"
+    SITE = "site"
+    OTHER = "other"
+
+
+class EmployeePaymentType(str, enum.Enum):
+    ADVANCE = "advance"
+    WAGE = "wage"
+
+
 class TimestampMixin:
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
@@ -180,4 +192,90 @@ class AuditLog(Base):
     actor: Mapped[str] = mapped_column(String(80), default="local_user")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, index=True
+    )
+
+
+class Employee(TimestampMixin, Base):
+    __tablename__ = "employees"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    name: Mapped[str] = mapped_column(String(180), nullable=False, index=True)
+    phone: Mapped[str | None] = mapped_column(String(40))
+    role: Mapped[str | None] = mapped_column(String(120))
+    daily_rate_kurus: Mapped[int | None] = mapped_column(Integer)
+    note: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[RecordStatus] = mapped_column(
+        Enum(RecordStatus), default=RecordStatus.ACTIVE, index=True
+    )
+
+
+class Site(TimestampMixin, Base):
+    __tablename__ = "sites"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    project_id: Mapped[str | None] = mapped_column(ForeignKey("projects.id", ondelete="RESTRICT"))
+    name: Mapped[str] = mapped_column(String(180), nullable=False, index=True)
+    address: Mapped[str | None] = mapped_column(Text)
+    note: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[RecordStatus] = mapped_column(
+        Enum(RecordStatus), default=RecordStatus.ACTIVE, index=True
+    )
+
+
+class WorkLog(TimestampMixin, Base):
+    __tablename__ = "work_logs"
+    __table_args__ = (
+        Index("ix_work_log_employee_date", "employee_id", "work_date"),
+        Index("ix_work_log_project_date", "project_id", "work_date"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    employee_id: Mapped[str] = mapped_column(
+        ForeignKey("employees.id", ondelete="RESTRICT"), nullable=False
+    )
+    project_id: Mapped[str | None] = mapped_column(ForeignKey("projects.id", ondelete="RESTRICT"))
+    site_id: Mapped[str | None] = mapped_column(ForeignKey("sites.id", ondelete="RESTRICT"))
+    work_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    hours: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False)
+    amount_kurus: Mapped[int] = mapped_column(Integer, nullable=False)
+    note: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[RecordStatus] = mapped_column(
+        Enum(RecordStatus), default=RecordStatus.ACTIVE, index=True
+    )
+
+
+class EmployeePayment(TimestampMixin, Base):
+    __tablename__ = "employee_payments"
+    __table_args__ = (Index("ix_employee_payment_date", "employee_id", "payment_date"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    employee_id: Mapped[str] = mapped_column(
+        ForeignKey("employees.id", ondelete="RESTRICT"), nullable=False
+    )
+    payment_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    amount_kurus: Mapped[int] = mapped_column(Integer, nullable=False)
+    payment_type: Mapped[EmployeePaymentType] = mapped_column(
+        Enum(EmployeePaymentType), nullable=False, index=True
+    )
+    note: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[RecordStatus] = mapped_column(
+        Enum(RecordStatus), default=RecordStatus.ACTIVE, index=True
+    )
+
+
+class ProjectExpense(TimestampMixin, Base):
+    __tablename__ = "project_expenses"
+    __table_args__ = (Index("ix_project_expense_date", "project_id", "expense_date"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    project_id: Mapped[str] = mapped_column(
+        ForeignKey("projects.id", ondelete="RESTRICT"), nullable=False
+    )
+    site_id: Mapped[str | None] = mapped_column(ForeignKey("sites.id", ondelete="RESTRICT"))
+    expense_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    category: Mapped[ExpenseCategory] = mapped_column(Enum(ExpenseCategory), nullable=False)
+    amount_kurus: Mapped[int] = mapped_column(Integer, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[RecordStatus] = mapped_column(
+        Enum(RecordStatus), default=RecordStatus.ACTIVE, index=True
     )
