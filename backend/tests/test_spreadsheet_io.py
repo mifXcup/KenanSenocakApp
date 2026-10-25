@@ -78,6 +78,13 @@ def test_opening_debt_import_and_xlsx_exports(client):
         raw = base64.b64decode(response.json()["content_base64"])
         assert raw.startswith(b"PK")
 
+    for kind in ("purchases", "project-costs"):
+        response = client.get(f"/api/v1/exports/{kind}/pdf")
+        assert response.status_code == 200
+        assert response.json()["mime_type"] == "application/pdf"
+        raw = base64.b64decode(response.json()["content_base64"])
+        assert raw.startswith(b"%PDF-")
+
 
 def test_workbook_size_type_and_unknown_supplier_are_rejected(client):
     wrong_type = {"file_name": "data.csv", "content_base64": base64.b64encode(b"a,b").decode()}

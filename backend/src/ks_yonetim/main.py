@@ -11,6 +11,7 @@ from .backup import BackupError, backup_manager
 from .database import ensure_schema
 from .ml import router as ml_router
 from .operations import router as operations_router
+from .pdf_exports import router as pdf_router
 from .spreadsheet_io import router as spreadsheet_router
 
 
@@ -38,3 +39,4 @@ app.include_router(router)
 app.include_router(operations_router)
 app.include_router(spreadsheet_router)
 app.include_router(ml_router)
+app.include_router(pdf_router)
