@@ -49,6 +49,7 @@ from .schemas import (
     PurchaseDetail,
     PurchaseRead,
     PurchaseReport,
+    PurchaseUpdate,
     SupplierBalance,
     SupplierCreate,
     SupplierRead,
@@ -490,6 +491,46 @@ def create_purchase(
     session.commit()
     session.refresh(purchase)
     return to_purchase_detail(purchase, payload.paid_kurus)
+
+
+@router.patch(
+    "/purchases/{purchase_id}",
+    response_model=PurchaseDetail,
+    dependencies=[Depends(require_sidecar_token)],
+)
+def update_purchase(
+    purchase_id: str, payload: PurchaseUpdate, session: Session = Depends(get_session)
+) -> PurchaseDetail:
+    purchase = require_active(session, Purchase, purchase_id, "Satın alma")
+    changes = payload.model_dump(exclude_unset=True)
+    if "due_date" in changes:
+        due_date = changes["due_date"]
+        if due_date is not None and due_date < purchase.purchase_date:
+            raise ApiError(
+                "invalid_due_date",
+                "Vade tarihi satın alma tarihinden önce olamaz.",
+                422,
+            )
+    if "project_id" in changes and changes["project_id"] is not None:
+        require_active(session, Project, changes["project_id"], "Proje")
+
+    before = {key: getattr(purchase, key) for key in changes}
+    for key, value in changes.items():
+        setattr(purchase, key, value)
+    if "project_id" in changes:
+        movements = session.scalars(
+            select(MaterialMovement).where(
+                MaterialMovement.purchase_id == purchase.id,
+                MaterialMovement.status == RecordStatus.ACTIVE,
+            )
+        ).all()
+        for movement in movements:
+            movement.project_id = changes["project_id"]
+
+    add_audit(session, "purchase", purchase.id, "updated", {"before": before, "after": changes})
+    session.commit()
+    session.refresh(purchase)
+    return to_purchase_detail(purchase, purchase_paid(session, purchase.id))
 
 
 @router.get(

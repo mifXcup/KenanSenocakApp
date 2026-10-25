@@ -160,6 +160,18 @@ class PurchaseCreate(BaseModel):
         )
 
 
+class PurchaseUpdate(BaseModel):
+    project_id: str | None = None
+    due_date: date | None = None
+    description: str | None = Field(default=None, max_length=2000)
+
+    @model_validator(mode="after")
+    def validate_patch(self) -> PurchaseUpdate:
+        if not self.model_fields_set:
+            raise ValueError("En az bir alan gönderilmelidir.")
+        return self
+
+
 class PurchaseRead(OrmModel):
     id: str
     supplier_id: str

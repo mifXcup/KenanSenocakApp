@@ -42,6 +42,7 @@
 | POST/GET | `/projects` | Proje oluştur/listele |
 | PATCH | `/projects/{id}` | Proje bilgileri, bütçe ve durumunu düzenle |
 | POST/GET | `/purchases` | Satın alma oluştur/listele |
+| PATCH | `/purchases/{id}` | Açıklama, vade veya proje bağlantısını düzelt |
 | POST | `/purchases/{id}/cancel` | Ödemesiz satın almayı iptal et |
 | POST/GET | `/payments` | Ödeme oluştur/listele |
 | POST | `/payments/{id}/reverse` | Ödemeyi tersle |
@@ -50,6 +51,8 @@
 Liste endpoint'leri `limit` (1–500) ve `offset` destekler. Satın alma listesi ayrıca `supplier_id`, `project_id`; ödeme listesi `supplier_id` ile filtrelenir.
 
 PATCH istekleri yalnız gönderilen alanları değiştirir. Boş body reddedilir. Firma ve malzeme adları benzersiz kalır; proje durumu `active`, `completed` veya `cancelled` değerlerinden biridir. Değişikliklerin önceki ve sonraki değerleri audit kaydına yazılır.
+
+Satın alma PATCH işlemi finansal tutarları, firmayı, malzemeyi veya miktarı değiştirmez. Yalnız `description`, `due_date` ve `project_id` kabul edilir. Proje bağlantısı değiştiğinde satın almanın otomatik malzeme hareketi de aynı projeye taşınır.
 
 ## Yedekleme kontratı
 
