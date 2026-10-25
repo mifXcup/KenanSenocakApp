@@ -1,0 +1,39 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ks-yonetim-core"
+version = "0.2.0"
+description = "Kenan Şenocak Yönetim yerel masaüstü veri çekirdeği"
+requires-python = ">=3.14"
+dependencies = [
+  "alembic>=1.16,<2",
+  "fastapi>=0.118,<1",
+  "pydantic-settings>=2.10,<3",
+  "sqlalchemy>=2.0.43,<3",
+  "uvicorn>=0.37,<1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "httpx>=0.28,<1",
+  "pyinstaller>=6.16,<7",
+  "pytest>=8.4,<10",
+  "ruff>=0.13,<1",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ks_yonetim"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+
+[tool.ruff.lint]
+ignore = ["B008"]
+

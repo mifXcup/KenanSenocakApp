@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="112" fill="#282421"/>
+  <path d="M76 116c0-22.091 17.909-40 40-40h280c22.091 0 40 17.909 40 40v280c0 22.091-17.909 40-40 40H116c-22.091 0-40-17.909-40-40V116Z" fill="none" stroke="#92502f" stroke-width="14"/>
+  <text x="256" y="306" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="176" font-weight="700" letter-spacing="-12" fill="#fcfaf7">KŞ</text>
+</svg>
