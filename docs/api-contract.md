@@ -34,10 +34,13 @@
 | POST | `/backups/{backup_id}/verify` | SHA-256, boyut ve SQLite integrity doğrula |
 | POST | `/backups/{backup_id}/restore` | Doğrulanmış yedeği güvenli geri yükle |
 | POST/GET | `/suppliers` | Firma oluştur/listele |
+| PATCH | `/suppliers/{id}` | Firma adı, telefon veya notunu düzenle |
 | GET | `/suppliers/{id}/balance` | Firma alış, ödeme ve kalan toplamı |
 | POST/GET | `/materials` | Malzeme oluştur/listele |
+| PATCH | `/materials/{id}` | Malzeme adı, birimi, takip biçimi veya notunu düzenle |
 | GET | `/materials/{id}/balance` | Tahmini miktar ve güven uyarısı |
 | POST/GET | `/projects` | Proje oluştur/listele |
+| PATCH | `/projects/{id}` | Proje bilgileri, bütçe ve durumunu düzenle |
 | POST/GET | `/purchases` | Satın alma oluştur/listele |
 | POST | `/purchases/{id}/cancel` | Ödemesiz satın almayı iptal et |
 | POST/GET | `/payments` | Ödeme oluştur/listele |
@@ -45,6 +48,8 @@
 | POST | `/material-movements` | Kullanım, fire, iade veya düzeltme oluştur |
 
 Liste endpoint'leri `limit` (1–500) ve `offset` destekler. Satın alma listesi ayrıca `supplier_id`, `project_id`; ödeme listesi `supplier_id` ile filtrelenir.
+
+PATCH istekleri yalnız gönderilen alanları değiştirir. Boş body reddedilir. Firma ve malzeme adları benzersiz kalır; proje durumu `active`, `completed` veya `cancelled` değerlerinden biridir. Değişikliklerin önceki ve sonraki değerleri audit kaydına yazılır.
 
 ## Yedekleme kontratı
 

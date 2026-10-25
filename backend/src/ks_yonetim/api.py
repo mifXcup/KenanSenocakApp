@@ -5,6 +5,7 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, Header, Query, Request
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from sqlalchemy import func, select
@@ -36,12 +37,14 @@ from .schemas import (
     MaterialBalance,
     MaterialCreate,
     MaterialRead,
+    MaterialUpdate,
     MovementCreate,
     MovementRead,
     PaymentCreate,
     PaymentRead,
     ProjectCreate,
     ProjectRead,
+    ProjectUpdate,
     PurchaseCreate,
     PurchaseDetail,
     PurchaseRead,
@@ -49,6 +52,7 @@ from .schemas import (
     SupplierBalance,
     SupplierCreate,
     SupplierRead,
+    SupplierUpdate,
 )
 
 router = APIRouter(prefix="/api/v1")
@@ -114,7 +118,7 @@ def add_audit(
             entity_type=entity_type,
             entity_id=entity_id,
             action=action,
-            detail=json.dumps(detail, ensure_ascii=False) if detail else None,
+            detail=json.dumps(jsonable_encoder(detail), ensure_ascii=False) if detail else None,
         )
     )
 
@@ -264,6 +268,29 @@ def create_supplier(payload: SupplierCreate, session: Session = Depends(get_sess
     return supplier
 
 
+@router.patch(
+    "/suppliers/{supplier_id}",
+    response_model=SupplierRead,
+    dependencies=[Depends(require_sidecar_token)],
+)
+def update_supplier(
+    supplier_id: str, payload: SupplierUpdate, session: Session = Depends(get_session)
+) -> Supplier:
+    supplier = require_active(session, Supplier, supplier_id, "Firma")
+    changes = payload.model_dump(exclude_unset=True)
+    before = {key: getattr(supplier, key) for key in changes}
+    for key, value in changes.items():
+        setattr(supplier, key, value)
+    add_audit(session, "supplier", supplier.id, "updated", {"before": before, "after": changes})
+    try:
+        session.commit()
+    except IntegrityError as exc:
+        session.rollback()
+        raise ApiError("duplicate_supplier", "Bu firma adı zaten kullanılıyor.", 409) from exc
+    session.refresh(supplier)
+    return supplier
+
+
 @router.get(
     "/suppliers", response_model=list[SupplierRead], dependencies=[Depends(require_sidecar_token)]
 )
@@ -301,6 +328,29 @@ def create_material(payload: MaterialCreate, session: Session = Depends(get_sess
     return material
 
 
+@router.patch(
+    "/materials/{material_id}",
+    response_model=MaterialRead,
+    dependencies=[Depends(require_sidecar_token)],
+)
+def update_material(
+    material_id: str, payload: MaterialUpdate, session: Session = Depends(get_session)
+) -> Material:
+    material = require_active(session, Material, material_id, "Malzeme")
+    changes = payload.model_dump(exclude_unset=True)
+    before = {key: getattr(material, key) for key in changes}
+    for key, value in changes.items():
+        setattr(material, key, value)
+    add_audit(session, "material", material.id, "updated", {"before": before, "after": changes})
+    try:
+        session.commit()
+    except IntegrityError as exc:
+        session.rollback()
+        raise ApiError("duplicate_material", "Bu malzeme adı zaten kullanılıyor.", 409) from exc
+    session.refresh(material)
+    return material
+
+
 @router.get(
     "/materials", response_model=list[MaterialRead], dependencies=[Depends(require_sidecar_token)]
 )
@@ -329,6 +379,25 @@ def create_project(payload: ProjectCreate, session: Session = Depends(get_sessio
     session.add(project)
     session.flush()
     add_audit(session, "project", project.id, "created")
+    session.commit()
+    session.refresh(project)
+    return project
+
+
+@router.patch(
+    "/projects/{project_id}",
+    response_model=ProjectRead,
+    dependencies=[Depends(require_sidecar_token)],
+)
+def update_project(
+    project_id: str, payload: ProjectUpdate, session: Session = Depends(get_session)
+) -> Project:
+    project = require_active(session, Project, project_id, "Proje")
+    changes = payload.model_dump(exclude_unset=True)
+    before = {key: getattr(project, key) for key in changes}
+    for key, value in changes.items():
+        setattr(project, key, value)
+    add_audit(session, "project", project.id, "updated", {"before": before, "after": changes})
     session.commit()
     session.refresh(project)
     return project

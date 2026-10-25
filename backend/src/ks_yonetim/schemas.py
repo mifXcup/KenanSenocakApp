@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import ROUND_HALF_UP, Decimal
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -16,6 +17,20 @@ class SupplierCreate(BaseModel):
     name: str = Field(min_length=2, max_length=180)
     phone: str | None = Field(default=None, max_length=40)
     note: str | None = Field(default=None, max_length=2000)
+
+
+class SupplierUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=2, max_length=180)
+    phone: str | None = Field(default=None, max_length=40)
+    note: str | None = Field(default=None, max_length=2000)
+
+    @model_validator(mode="after")
+    def validate_patch(self) -> SupplierUpdate:
+        if not self.model_fields_set:
+            raise ValueError("En az bir alan gönderilmelidir.")
+        if "name" in self.model_fields_set and self.name is None:
+            raise ValueError("Firma adı boş bırakılamaz.")
+        return self
 
 
 class SupplierRead(OrmModel):
@@ -34,6 +49,23 @@ class MaterialCreate(BaseModel):
     note: str | None = Field(default=None, max_length=2000)
 
 
+class MaterialUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=2, max_length=180)
+    default_unit: str | None = Field(default=None, min_length=1, max_length=24)
+    tracking_mode: TrackingMode | None = None
+    note: str | None = Field(default=None, max_length=2000)
+
+    @model_validator(mode="after")
+    def validate_patch(self) -> MaterialUpdate:
+        if not self.model_fields_set:
+            raise ValueError("En az bir alan gönderilmelidir.")
+        required = {"name", "default_unit", "tracking_mode"}
+        for field_name in required & self.model_fields_set:
+            if getattr(self, field_name) is None:
+                raise ValueError(f"{field_name} boş bırakılamaz.")
+        return self
+
+
 class MaterialRead(OrmModel):
     id: str
     name: str
@@ -49,6 +81,25 @@ class ProjectCreate(BaseModel):
     contract_amount_kurus: int | None = Field(default=None, ge=0)
     budget_kurus: int | None = Field(default=None, ge=0)
     note: str | None = Field(default=None, max_length=2000)
+
+
+class ProjectUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=2, max_length=180)
+    customer_name: str | None = Field(default=None, min_length=2, max_length=180)
+    contract_amount_kurus: int | None = Field(default=None, ge=0)
+    budget_kurus: int | None = Field(default=None, ge=0)
+    project_state: Literal["active", "completed", "cancelled"] | None = None
+    note: str | None = Field(default=None, max_length=2000)
+
+    @model_validator(mode="after")
+    def validate_patch(self) -> ProjectUpdate:
+        if not self.model_fields_set:
+            raise ValueError("En az bir alan gönderilmelidir.")
+        required = {"name", "customer_name", "project_state"}
+        for field_name in required & self.model_fields_set:
+            if getattr(self, field_name) is None:
+                raise ValueError(f"{field_name} boş bırakılamaz.")
+        return self
 
 
 class ProjectRead(OrmModel):
