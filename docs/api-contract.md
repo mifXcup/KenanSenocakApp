@@ -47,12 +47,31 @@
 | POST/GET | `/payments` | Ödeme oluştur/listele |
 | POST | `/payments/{id}/reverse` | Ödemeyi tersle |
 | POST | `/material-movements` | Kullanım, fire, iade veya düzeltme oluştur |
+| POST/GET | `/employees` | Personel oluştur/listele |
+| POST/GET | `/sites` | Şantiye oluştur/listele |
+| POST/GET | `/work-logs` | Çalışma ve işçilik maliyeti oluştur/listele |
+| POST | `/work-logs/{id}/cancel` | Çalışma kaydını iptal et |
+| POST/GET | `/employee-payments` | Avans veya ücret ödemesi oluştur/listele |
+| POST | `/employee-payments/{id}/reverse` | Personel ödemesini tersle |
+| POST/GET | `/project-expenses` | Proje gideri oluştur/listele |
+| POST | `/project-expenses/{id}/cancel` | Proje giderini iptal et |
+| GET | `/projects/{id}/cost-summary` | Malzeme, işçilik ve diğer giderleri birleştir |
+| GET | `/imports/templates/{kind}` | Excel içe aktarma şablonu üret |
+| POST | `/imports/{kind}/preview` | Excel dosyasını kayıt yapmadan doğrula |
+| POST | `/imports/{kind}/commit` | Yedek alıp doğrulanmış satırları atomik kaydet |
+| GET | `/exports/{kind}` | XLSX rapor üret |
+| GET | `/exports/{kind}/pdf` | PDF rapor üret |
+| GET | `/analytics/ml/insights` | Yerel fiyat, yeniden alım ve proje riski tahminleri |
 
 Liste endpoint'leri `limit` (1–500) ve `offset` destekler. Satın alma listesi ayrıca `supplier_id`, `project_id`; ödeme listesi `supplier_id` ile filtrelenir.
 
 PATCH istekleri yalnız gönderilen alanları değiştirir. Boş body reddedilir. Firma ve malzeme adları benzersiz kalır; proje durumu `active`, `completed` veya `cancelled` değerlerinden biridir. Değişikliklerin önceki ve sonraki değerleri audit kaydına yazılır.
 
 Satın alma PATCH işlemi finansal tutarları, firmayı, malzemeyi veya miktarı değiştirmez. Yalnız `description`, `due_date` ve `project_id` kabul edilir. Proje bağlantısı değiştiğinde satın almanın otomatik malzeme hareketi de aynı projeye taşınır.
+
+Excel aktarımı `suppliers`, `materials` ve `opening-debts` türlerini destekler. Dosya üst sınırı 8 MB, satır üst sınırı 5.000'dir. Commit öncesinde `pre_import` yedeği alınır; herhangi bir hatalı satır varsa hiçbir kayıt yazılmaz. Dışa aktarma `suppliers`, `materials`, `purchases`, `project-costs`; PDF ise `purchases` ve `project-costs` türlerini destekler.
+
+Yerel tahmin endpoint'i fiyat için en az 5, yeniden alım aralığı için en az 4 satın alma; proje riski için en az 4 maliyet olayı ister. Veri yeterli değilse boş sonuç ve `ready=false` döndürür.
 
 ## Yedekleme kontratı
 

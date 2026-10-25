@@ -12,6 +12,12 @@ Mobilya atölyesi için çevrimdışı çalışan Windows masaüstü yönetim uy
 - Tedarikçi borçları, ödemeler ve geçmiş hareketler
 - Yönetim paneli ve satın alma raporları
 - Doğrulanabilir yerel yedekleme ve geri yükleme
+- Personel, şantiye, çalışma ve avans/ücret kayıtları
+- Nakliye, montaj, şantiye ve diğer proje giderleri
+- Birleşik proje maliyeti, bütçe farkı ve tahmini kâr
+- Kontrollü Excel şablonları, ön izleme ve toplu içe aktarma
+- Excel ve PDF rapor dışa aktarma
+- Yerel fiyat anomalisi, yeniden alım ve bütçe riski tahminleri
 
 Bu sürüm bilinçli olarak KDV, iskonto ve ayrıntılı fatura/muhasebe işlemleri içermez.
 
@@ -49,8 +55,10 @@ Windows kurulum paketi:
 npm run dist
 ```
 
-## Sonraki aşamalar
+## Yerel tahmin modelleri
 
-- Yeterli gerçek veri biriktikten sonra tahmin ve anomali odaklı makine öğrenmesi
-- Personel ve şantiye modülleri
-- İmzalı ticari dağıtım paketi
+Tahminler hiçbir veriyi dışarı göndermez. Fiyat modeli en az 5, yeniden alım modeli en az 4 kayıt ister. Proje bütçe modeli en az 4 maliyet hareketi olmadan sonuç üretmez. Yetersiz veri, tahmin yerine açıkça bildirilir.
+
+## Dağıtım notu
+
+Ticari dağıtım öncesinde kurulum paketinin kod imzalama sertifikasıyla imzalanması gerekir.

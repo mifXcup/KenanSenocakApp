@@ -98,7 +98,7 @@ Sidecar loopback dışındaki hostları, geçersiz portu ve 32 karakterden kısa
 - Yedekler çalışan veritabanından Python `sqlite3.Connection.backup()` online backup API ile alınır; canlı `.db` dosyası ham biçimde kopyalanmaz.
 - Hedef `%LOCALAPPDATA%/Kenan Senocak Yonetim/data/backups` dizinidir.
 - Snapshot önce aynı dizindeki gizli `.tmp` dosyasına yazılır, `PRAGMA integrity_check` çalıştırılır, SHA-256 ve byte boyutu metadata'sı üretilir, ardından `os.replace` ile atomik olarak son adına geçirilir.
-- Uygulama açılışında o yerel gün için otomatik yedek yoksa bir tane oluşturulur. Yalnız otomatik yedeklerde son 30 kayıt tutulur; manuel ve `pre_restore` yedekleri retention tarafından silinmez.
+- Uygulama açılışında o yerel gün için otomatik yedek yoksa bir tane oluşturulur. Yalnız otomatik yedeklerde son 30 kayıt tutulur; manuel, `pre_restore` ve `pre_import` yedekleri retention tarafından silinmez.
 - Restore öncesinde seçilen dosyanın adı/path sınırı, metadata, SHA-256, boyut ve SQLite bütünlüğü doğrulanır. Ardından mevcut canlı verinin `pre_restore` yedeği alınır.
 - Restore yarıda kalırsa canlı veri `pre_restore` yedeğinden geri alınır. Başarılı yanıtta istemciye `restart_required: true` döner.
 - Oluşturma, doğrulama, hata, retention ve restore olayları `backup-events.jsonl` dosyasına yazılır; mümkün olduğunda ilişkisel audit log'a da eklenir.
@@ -106,5 +106,13 @@ Sidecar loopback dışındaki hostları, geçersiz portu ve 32 karakterden kısa
 
 ## Makine öğrenmesi sınırı
 
-Model kodu işlem kayıtlarını değiştiremez. Eğitim girdisi sürümlü ve salt-okunur snapshot'tan alınır; çıktı tahmin, güven ve kullanılan dönem bilgisiyle ayrı tabloda saklanır. Yeterli veri eşiği model bazında doğrulanana kadar deterministik rapor gösterilir.
+Model kodu işlem kayıtlarını değiştiremez ve hiçbir veriyi dış servise göndermez. Tahminler API isteği sırasında salt okunur yerel kayıtlardan yeniden hesaplanır. Fiyat anomalisi doğrusal trend artıkları, yeniden alım tarihi medyan sipariş aralığı, proje riski kümülatif maliyet regresyonu kullanır. Fiyat için 5, yeniden alım için 4 satın alma; proje riski için 4 maliyet olayı oluşmadan sonuç üretilmez.
+
+## Operasyon ve dosya aktarımı
+
+- Personel, şantiye, çalışma, personel ödemesi ve proje gideri ayrı tablolarda tutulur.
+- Proje maliyet özeti satın alma, işçilik ve diğer giderleri sorgu anında birleştirir.
+- Excel dosyaları salt okunur açılır; uzantı, base64, sıkıştırılmış/açılmış boyut, parça sayısı, başlık ve satır sınırları doğrulanır.
+- İçe aktarma commit'i öncesinde SQLite online `pre_import` yedeği alınır. Hatalı tek satır varsa hiçbir kayıt yazılmaz.
+- XLSX ve PDF çıktıları backend tarafından bellekte üretilir; geçici rapor dosyası kullanıcı veri dizinine bırakılmaz.
 

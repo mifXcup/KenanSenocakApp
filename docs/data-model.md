@@ -11,6 +11,11 @@
 | `payments` | Firmaya yapılan ödeme | Alışa bağlı veya firma geneline yapılabilir; terslenebilir |
 | `material_movements` | Alınan/kullanılan/fire/iade | Kesin, yaklaşık veya yalnız maliyet güveni taşır |
 | `audit_logs` | Değişmez işlem izi | Oluşturma, iptal ve tersleme olayları |
+| `employees` | Personel kartı | Günlük ücret isteğe bağlı; silinmez, arşivlenir |
+| `sites` | Şantiye kartı | İsteğe bağlı olarak tek projeye bağlanır |
+| `work_logs` | Günlük çalışma ve işçilik | Saat ve maliyet taşır; iptal edilebilir |
+| `employee_payments` | Avans ve ücret ödemesi | Finansal kayıt terslenir, silinmez |
+| `project_expenses` | Nakliye, montaj, şantiye ve diğer gider | Proje zorunlu, şantiye isteğe bağlı |
 
 ## Yedek metadata modeli
 
@@ -27,6 +32,11 @@ Supplier 1 ── N Purchase N ── 1 Material
 
 Material 1 ── N MaterialMovement N ── 0..1 Project
                          └─────────── 0..1 Purchase
+
+Employee 1 ── N WorkLog N ── 0..1 Project
+                    └─────── 0..1 Site
+Employee 1 ── N EmployeePayment
+Project 1 ── N ProjectExpense N ── 0..1 Site
 ```
 
 ## Hesaplama kuralları
@@ -69,9 +79,7 @@ satın alma + iade + pozitif düzeltme - kullanım - fire
 ## Sonraki migration'lar
 
 - Müşteriyi projeden bağımsız tabloya ayırma
-- Vade ve borç yaşlandırma alanları
 - Ek/dosya metadata tablosu
 - Proje tahsilatları ve finans hareket defteri
-- Personel maliyet dönemi, zaman kaydı ve şantiye ziyareti
-- ML veri snapshot ve prediction tabloları
+- Gerekirse tahmin sonucu geçmişi; mevcut ML hesapları salt okunur ve istek anında üretilir
 
