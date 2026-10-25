@@ -510,3 +510,58 @@ class ImportCommitResult(BaseModel):
     created: int
     skipped_duplicates: int
     backup_id: str
+
+
+class MLStatus(BaseModel):
+    ready: bool
+    purchase_count: int
+    material_series_ready: int
+    reorder_series_ready: int
+    project_series_ready: int
+    minimum_price_samples: int
+    minimum_reorder_samples: int
+    message: str
+
+
+class PriceAnomaly(BaseModel):
+    material_id: str
+    material_name: str
+    unit: str
+    sample_count: int
+    latest_date: date
+    latest_unit_price_kurus: int
+    expected_unit_price_kurus: int
+    deviation_percent: float
+    anomaly_score: float
+    is_anomaly: bool
+    next_expected_unit_price_kurus: int
+
+
+class ReorderForecast(BaseModel):
+    material_id: str
+    material_name: str
+    sample_count: int
+    median_interval_days: int
+    next_expected_date: date
+    days_until_expected: int
+    confidence: str
+
+
+class ProjectRisk(BaseModel):
+    project_id: str
+    project_name: str
+    sample_count: int
+    current_cost_kurus: int
+    budget_kurus: int
+    projected_30d_cost_kurus: int
+    budget_usage_percent: float
+    projected_usage_percent: float
+    risk_level: str
+
+
+class MLInsights(BaseModel):
+    as_of: date
+    status: MLStatus
+    price_anomalies: list[PriceAnomaly]
+    reorder_forecasts: list[ReorderForecast]
+    project_risks: list[ProjectRisk]
