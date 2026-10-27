@@ -34,7 +34,7 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(
     title="Kenan Şenocak Yönetim Core",
-    version="0.2.0",
+    version="0.3.0",
     docs_url=None,
     redoc_url=None,
     lifespan=lifespan,

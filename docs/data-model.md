@@ -83,3 +83,35 @@ satın alma + iade + pozitif düzeltme - kullanım - fire
 - Proje tahsilatları ve finans hareket defteri
 - Gerekirse tahmin sonucu geçmişi; mevcut ML hesapları salt okunur ve istek anında üretilir
 
+
+## v0.3.0 tabloları
+
+- `employees`: `employment_start_date`, `employment_end_date`, `employment_state` (active/inactive/left),
+  `wage_type` (monthly/daily/hourly), `current_rate_kurus`, `iban`, `payment_note`; `daily_rate_kurus`
+  eski istemciler için günlük ücretin aynasıdır.
+- `employee_wage_rates`: çakışmasız ücret dönemleri; geçmiş hesap tarihte geçerli kaydı kullanır.
+- `work_logs`: `work_status`, `normal_hours`, `overtime_hours`, `calculated_amount_kurus`,
+  `manual_amount_kurus`; `amount_kurus` etkin maliyet, `hours` toplam saattir. Bir personel için aynı gün
+  tek aktif kayıt vardır (uygulama düzeyinde zorlanır).
+- `app_settings`: fazla mesai oranı ve standart gün saati.
+- `payroll_periods`, `payroll_entries`: draft → calculated → finalized → closed; finalized/closed dönem
+  hesapları değişmez, düzeltme `correction` hareketiyle yapılır.
+- `employee_financial_movements`: değişmez defter. Şirket borcu, avans havuzu ve personel borç havuzu ayrı
+  hesaplanır; `reversed_movement_id` benzersizdir; `idempotency_key` benzersizdir. v0.2.0
+  `employee_payments` satırları aynı kimlikle taşınır, eski tablo korunur.
+- `ml_runs`, `ml_predictions`: yerel model çalıştırma ve tahmin/gerçekleşme geçmişi.
+
+### Alembic revizyonları
+
+1. `1597ff061a94` initial local core
+2. `a3c1d2e4f5b6` add purchase due date
+3. `b4d2e3f5a6c7` add operations and project costs (v0.2.0)
+4. `c5e3f4a6b7d8` employee model and wage rates
+5. `d6f4a5b7c8e9` work log statuses and settings
+6. `e7a5b6c8d9f0` payroll periods and entries
+7. `f8b6c7d9e0a1` employee financial movements
+8. `a9c7d8e0f1b2` ml runs and predictions
+
+Açılışta `ks_yonetim.migrate.upgrade_database` çalışır: eski (`alembic_version` olmayan) veritabanını tablo/sütun
+izinden tanıyıp damgalar, bekleyen revizyon varsa önce `pre_migration` yedeği alır, başarısızlıkta canlı
+veritabanını bu yedekten geri yükler.

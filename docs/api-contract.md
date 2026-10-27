@@ -170,3 +170,62 @@ Yanıt toplam, ödenen ve kalan tutarı birlikte döndürür.
 - Ulaşılamıyor: “Yerel veri hizmeti başlatılamadı” kurtarma ekranı; kayıt yapılmış gibi davranılmaz.
 - Mutation tekrarında aynı `idempotency_key` kullanılmalıdır.
 
+
+## v0.3.0 — Personel, maaş, finans defteri ve yerel ML
+
+Bu sistem resmî bordro/SGK/vergi hesabı yapmaz; işletme içi maaş ve borç takibidir. Tüm para değerleri
+kuruş (integer), finansal kayıtlar fiziksel silinmez (ters kayıt veya iptal durumu), her değişiklik
+audit log'a yazılır. Yeni liste uçlarının hepsi `limit`/`offset` ile sayfalanır.
+
+| Method | Yol | Amaç |
+| --- | --- | --- |
+| POST/GET | `/employees` | Personel oluştur (ücret türü, güncel ücret, IBAN, işe giriş/çıkış)/listele (`employment_state`, `include_archived`, `q`) |
+| PATCH | `/employees/{id}` | Kart bilgileri; ücret değişikliği yalnız wage-rates ile |
+| POST | `/employees/{id}/archive` | Personeli arşivle (silinmez) |
+| GET/POST | `/employees/{id}/wage-rates` | Çakışmasız ücret geçmişi; yeni açık uçlu ücret öncekini kapatır |
+| POST | `/employees/{id}/wage-rates/{rate_id}/cancel` | Yanlış ücret kaydını iptal et |
+| POST/GET | `/work-logs` | Puantaj (`work_status`, `normal_hours`, `overtime_hours`, `manual_amount_kurus`); eski `hours`/`amount_kurus` alanları kabul edilir |
+| PATCH | `/work-logs/{id}` | Puantaj düzelt; tutar yeniden hesaplanır |
+| POST | `/work-logs/{id}/cancel` | Puantajı iptal et (maliyetten çıkar) |
+| GET | `/work-logs/import-template` | Excel puantaj şablonu |
+| POST | `/work-logs/bulk-preview` | Excel ön izleme (hatalı/mükerrer satır listesi) |
+| POST | `/work-logs/bulk-commit` | `pre_import` yedeği alıp atomik aktarım; tek hata varsa hiçbir kayıt yazılmaz |
+| GET/PUT | `/settings/payroll` | Fazla mesai oranı (%) ve standart gün saati |
+| POST/GET | `/payroll-periods` | Maaş dönemi oluştur (çakışma yok)/listele |
+| GET | `/payroll-periods/{id}` | Dönem ve toplamlar |
+| POST | `/payroll-periods/{id}/calculate` | Draft/calculated dönemi deterministik hesapla |
+| POST | `/payroll-periods/{id}/finalize` | `pre_finalize` yedeği alır, bayat hesabı reddeder, tahakkuk hareketlerini yazar |
+| POST | `/payroll-periods/{id}/close` | Kapat (ödenmemiş kalan varsa `allow_unpaid` gerekir) |
+| GET | `/payroll-periods/{id}/entries` | Personel bazlı hesap satırları |
+| GET | `/payroll-periods/{id}/export.xlsx`, `/export.pdf` | Dosya çıktısı (ham dosya) |
+| POST/GET | `/employee-finance/movements` | Finans defteri hareketi (`idempotency_key` zorunlu)/listele |
+| POST | `/employee-finance/movements/{id}/reverse` | Ters kayıt (bir hareket yalnız bir kez) |
+| GET | `/employees/{id}/financial-summary` | Şirket borcu / personel borcu ayrı toplamlar |
+| GET | `/employees/{id}/statement` | Hesap ekstresi ve yürüyen bakiye |
+| GET | `/employees/{id}/debt-aging` | `not_due`, `1_30`, `31_60`, `61_90`, `90_plus`, `no_due_date` |
+| GET | `/projects/{id}/cost-summary` | Satın alma + işçilik tahakkuku + giderler, bütçe/kâr/marj |
+| GET | `/projects/{id}/labor-breakdown` | Personel, ay, şantiye ve durum kırılımı |
+| GET | `/sites/{id}/cost-summary` | Şantiye işçilik ve gider özeti |
+| GET | `/analytics/ml/status` | Model hazırlığı, son çalıştırma, değerlendirme (`local_only: true`) |
+| POST | `/analytics/ml/run` | Seçilen/tüm modelleri çalıştır, sonuçları kaydet, bekleyen tahminleri değerlendir |
+| GET | `/analytics/ml/insights` | Canlı içgörüler (A–F modelleri) |
+| GET | `/analytics/ml/runs`, `/analytics/ml/predictions` | Sonuç geçmişi |
+| POST | `/analytics/ml/predictions/{id}/feedback` | `useful`/`not_useful`/`wrong` |
+| POST | `/analytics/ml/evaluate` | Gerçekleşen değerle değerlendirme |
+| GET | `/reports/staff` | Rapor listesi (12 rapor) |
+| GET | `/reports/staff/{name}` | JSON rapor (`date_from`, `date_to`, `employee_id`, `project_id`, `site_id`, `payroll_period_id`) |
+| GET | `/reports/staff/{name}/export.xlsx`, `/export.pdf` | Aynı üreticiden dosya çıktısı |
+
+Raporlar: `employee-statement`, `payroll-period-summary`, `unpaid-payroll`, `employee-advances`,
+`employee-debts`, `payment-history`, `project-labor`, `site-labor`, `monthly-staff-cost`,
+`upcoming-payments`, `debt-aging`, `ml-prediction-vs-actual`.
+
+Eski `/employee-payments` uçları korunur ve artık deftere yazar (`advance` → avans, `wage` → maaş ödemesi;
+fazla ödeme otomatik avans olur). Yeni hata kodları: `period_locked`, `payroll_stale`,
+`payroll_period_overlap`, `wage_rate_overlap`, `duplicate_work_log`, `already_reversed`,
+`system_movement`, `overpayment`, `idempotency_conflict`.
+
+Hesap kuralları: günlük = ücret × normal saat / 8; saatlik = ücret × saat; aylık = takvim günü başına
+aylık/gün sayısı (tam takvim ayı tam aylık ücret, ücretsiz izin/devamsızlık günü düşer, kaydı olmayan
+gün çalışıldı sayılır); fazla mesai = saatlik karşılık × saat × oran (varsayılan %150, dönemde
+değiştirilebilir). Yuvarlama bileşen başına `ROUND_HALF_UP`.

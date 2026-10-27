@@ -351,6 +351,7 @@ class BackupRead(BaseModel):
     sha256: str
     app_version: str
     integrity: str
+    schema_revision: str | None = None
 
 
 class BackupStatus(BaseModel):
