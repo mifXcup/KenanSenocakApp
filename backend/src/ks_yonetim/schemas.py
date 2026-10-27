@@ -369,12 +369,79 @@ class BackupRestoreResult(BaseModel):
     restart_required: bool = True
 
 
+WageType = Literal["monthly", "daily", "hourly"]
+EmploymentState = Literal["active", "inactive", "left"]
+DEFAULT_RATE_START = date(2000, 1, 1)
+
+
+def _clean_iban(value: str | None) -> str | None:
+    if value is None:
+        return None
+    cleaned = "".join(value.split()).upper()
+    if not cleaned:
+        return None
+    if not cleaned.isalnum() or not 15 <= len(cleaned) <= 34:
+        raise ValueError("IBAN 15–34 karakterli harf/rakam dizisi olmalıdır.")
+    return cleaned
+
+
 class EmployeeCreate(BaseModel):
     name: str = Field(min_length=2, max_length=180)
     phone: str | None = Field(default=None, max_length=40)
     role: str | None = Field(default=None, max_length=120)
     daily_rate_kurus: int | None = Field(default=None, ge=0)
+    wage_type: WageType | None = None
+    current_rate_kurus: int | None = Field(default=None, ge=0)
+    rate_effective_from: date | None = None
+    employment_start_date: date | None = None
+    employment_end_date: date | None = None
+    employment_state: EmploymentState = "active"
+    iban: str | None = Field(default=None, max_length=48)
+    payment_note: str | None = Field(default=None, max_length=2000)
     note: str | None = Field(default=None, max_length=2000)
+
+    @model_validator(mode="after")
+    def validate_employee(self) -> EmployeeCreate:
+        if self.daily_rate_kurus is not None:
+            if self.wage_type not in (None, "daily"):
+                raise ValueError("daily_rate_kurus yalnız günlük ücretle kullanılabilir.")
+            if self.current_rate_kurus not in (None, self.daily_rate_kurus):
+                raise ValueError("daily_rate_kurus ve current_rate_kurus uyuşmuyor.")
+            self.wage_type = "daily"
+            self.current_rate_kurus = self.daily_rate_kurus
+        if (
+            self.employment_start_date
+            and self.employment_end_date
+            and self.employment_end_date < self.employment_start_date
+        ):
+            raise ValueError("İşten ayrılış tarihi başlangıçtan önce olamaz.")
+        self.iban = _clean_iban(self.iban)
+        return self
+
+
+class EmployeeUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = Field(default=None, min_length=2, max_length=180)
+    phone: str | None = Field(default=None, max_length=40)
+    role: str | None = Field(default=None, max_length=120)
+    employment_start_date: date | None = None
+    employment_end_date: date | None = None
+    employment_state: EmploymentState | None = None
+    iban: str | None = Field(default=None, max_length=48)
+    payment_note: str | None = Field(default=None, max_length=2000)
+    note: str | None = Field(default=None, max_length=2000)
+
+    @model_validator(mode="after")
+    def validate_patch(self) -> EmployeeUpdate:
+        if not self.model_fields_set:
+            raise ValueError("En az bir alan gönderilmelidir.")
+        for field_name in {"name", "employment_state"} & self.model_fields_set:
+            if getattr(self, field_name) is None:
+                raise ValueError(f"{field_name} boş bırakılamaz.")
+        if "iban" in self.model_fields_set:
+            self.iban = _clean_iban(self.iban)
+        return self
 
 
 class EmployeeRead(OrmModel):
@@ -383,8 +450,42 @@ class EmployeeRead(OrmModel):
     phone: str | None
     role: str | None
     daily_rate_kurus: int | None
+    wage_type: str
+    current_rate_kurus: int | None
+    employment_start_date: date | None
+    employment_end_date: date | None
+    employment_state: str
+    iban: str | None
+    payment_note: str | None
     note: str | None
     status: RecordStatus
+
+
+class WageRateCreate(BaseModel):
+    effective_from: date
+    effective_to: date | None = None
+    wage_type: WageType
+    rate_kurus: int = Field(ge=0)
+    reason: str | None = Field(default=None, max_length=255)
+
+    @model_validator(mode="after")
+    def validate_range(self) -> WageRateCreate:
+        if self.effective_to is not None and self.effective_to < self.effective_from:
+            raise ValueError("Bitiş tarihi başlangıçtan önce olamaz.")
+        return self
+
+
+class WageRateRead(OrmModel):
+    id: str
+    employee_id: str
+    effective_from: date
+    effective_to: date | None
+    wage_type: str
+    rate_kurus: int
+    reason: str | None
+    status: RecordStatus
+    created_at: datetime
+    updated_at: datetime
 
 
 class SiteCreate(BaseModel):

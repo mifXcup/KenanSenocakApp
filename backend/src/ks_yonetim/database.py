@@ -34,17 +34,11 @@ engine = build_engine()
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
 
-def ensure_schema(target: Engine | None = None) -> None:
-    """Tabloları oluşturur; v0.1 ile açılmış veritabanlarına sonradan eklenen sütunları ekler."""
-    bind = target or engine
-    Base.metadata.create_all(bind=bind)
-    with bind.begin() as connection:
-        columns = {row[1] for row in connection.exec_driver_sql("PRAGMA table_info(purchases)")}
-        if "due_date" not in columns:
-            connection.exec_driver_sql("ALTER TABLE purchases ADD COLUMN due_date DATE")
-            connection.exec_driver_sql(
-                "CREATE INDEX IF NOT EXISTS ix_purchases_due_date ON purchases (due_date)"
-            )
+def ensure_schema(target: Engine | None = None) -> dict:
+    """Şemayı Alembic head'ine getirir (eski create_all veritabanlarını tanıyıp yedekle yükseltir)."""
+    from .migrate import upgrade_database
+
+    return upgrade_database(target or engine)
 
 
 def get_session() -> Generator[Session]:

@@ -2,13 +2,17 @@
 from PyInstaller.utils.hooks import collect_submodules
 
 
-hiddenimports = collect_submodules("uvicorn")
+hiddenimports = (
+    collect_submodules("uvicorn")
+    + collect_submodules("alembic")
+    + ["sqlalchemy.dialects.sqlite"]
+)
 
 analysis = Analysis(
     ["src/ks_yonetim/sidecar.py"],
     pathex=["src"],
     binaries=[],
-    datas=[],
+    datas=[("migrations", "migrations")],
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},

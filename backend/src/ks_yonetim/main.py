@@ -9,6 +9,7 @@ from . import models  # noqa: F401
 from .api import ApiError, api_error_handler, router, validation_error_handler
 from .backup import BackupError, backup_manager
 from .database import ensure_schema
+from .employees import router as employees_router
 from .ml import router as ml_router
 from .operations import router as operations_router
 from .pdf_exports import router as pdf_router
@@ -36,6 +37,7 @@ app = FastAPI(
 app.add_exception_handler(ApiError, api_error_handler)
 app.add_exception_handler(RequestValidationError, validation_error_handler)
 app.include_router(router)
+app.include_router(employees_router)
 app.include_router(operations_router)
 app.include_router(spreadsheet_router)
 app.include_router(ml_router)

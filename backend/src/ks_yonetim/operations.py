@@ -20,10 +20,8 @@ from .models import (
     WorkLog,
 )
 from .schemas import (
-    EmployeeCreate,
     EmployeePaymentCreate,
     EmployeePaymentRead,
-    EmployeeRead,
     ProjectCostSummary,
     ProjectExpenseCreate,
     ProjectExpenseRead,
@@ -32,34 +30,9 @@ from .schemas import (
     WorkLogCreate,
     WorkLogRead,
 )
+from .wages import load_rate_book
 
 router = APIRouter(prefix="/api/v1", dependencies=[Depends(require_sidecar_token)])
-
-
-@router.post("/employees", response_model=EmployeeRead, status_code=201)
-def create_employee(payload: EmployeeCreate, session: Session = Depends(get_session)) -> Employee:
-    employee = Employee(**payload.model_dump())
-    session.add(employee)
-    session.flush()
-    add_audit(session, "employee", employee.id, "created")
-    session.commit()
-    session.refresh(employee)
-    return employee
-
-
-@router.get("/employees", response_model=list[EmployeeRead])
-def list_employees(
-    session: Session = Depends(get_session),
-    limit: int = Query(100, ge=1, le=500),
-    offset: int = Query(0, ge=0),
-):
-    return session.scalars(
-        select(Employee)
-        .where(Employee.status == RecordStatus.ACTIVE)
-        .order_by(Employee.name)
-        .limit(limit)
-        .offset(offset)
-    ).all()
 
 
 @router.post("/sites", response_model=SiteRead, status_code=201)
@@ -103,14 +76,18 @@ def create_work_log(payload: WorkLogCreate, session: Session = Depends(get_sessi
         validate_site_project(site, payload.project_id)
     amount = payload.amount_kurus
     if amount is None:
-        if employee.daily_rate_kurus is None:
+        rate = load_rate_book(session, [employee.id]).at(employee.id, payload.work_date)
+        if rate is None:
             raise ApiError(
                 "missing_labor_rate",
-                "Tutar girilmeli veya personel kartında günlük ücret bulunmalıdır.",
+                "Tutar girilmeli veya personelin o tarihte geçerli ücreti bulunmalıdır.",
                 422,
             )
+        divisor = {"hourly": Decimal(1), "daily": Decimal(8), "monthly": Decimal(240)}[
+            rate.wage_type
+        ]
         amount = int(
-            (Decimal(employee.daily_rate_kurus) * payload.hours / Decimal(8)).quantize(
+            (Decimal(rate.rate_kurus) * payload.hours / divisor).quantize(
                 Decimal(1), rounding=ROUND_HALF_UP
             )
         )

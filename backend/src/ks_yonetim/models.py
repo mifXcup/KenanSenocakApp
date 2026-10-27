@@ -202,8 +202,36 @@ class Employee(TimestampMixin, Base):
     name: Mapped[str] = mapped_column(String(180), nullable=False, index=True)
     phone: Mapped[str | None] = mapped_column(String(40))
     role: Mapped[str | None] = mapped_column(String(120))
+    # Eski (v0.2.0) alan: yalnız günlük ücretli personelde current_rate_kurus aynasıdır.
     daily_rate_kurus: Mapped[int | None] = mapped_column(Integer)
+    employment_start_date: Mapped[date | None] = mapped_column(Date)
+    employment_end_date: Mapped[date | None] = mapped_column(Date)
+    employment_state: Mapped[str] = mapped_column(
+        String(16), default="active", server_default="active", index=True
+    )
+    wage_type: Mapped[str] = mapped_column(String(16), default="daily", server_default="daily")
+    current_rate_kurus: Mapped[int | None] = mapped_column(Integer)
+    iban: Mapped[str | None] = mapped_column(String(34))
+    payment_note: Mapped[str | None] = mapped_column(Text)
     note: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[RecordStatus] = mapped_column(
+        Enum(RecordStatus), default=RecordStatus.ACTIVE, index=True
+    )
+
+
+class EmployeeWageRate(TimestampMixin, Base):
+    __tablename__ = "employee_wage_rates"
+    __table_args__ = (Index("ix_wage_rate_employee_from", "employee_id", "effective_from"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    employee_id: Mapped[str] = mapped_column(
+        ForeignKey("employees.id", ondelete="RESTRICT"), nullable=False
+    )
+    effective_from: Mapped[date] = mapped_column(Date, nullable=False)
+    effective_to: Mapped[date | None] = mapped_column(Date)
+    wage_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    rate_kurus: Mapped[int] = mapped_column(Integer, nullable=False)
+    reason: Mapped[str | None] = mapped_column(String(255))
     status: Mapped[RecordStatus] = mapped_column(
         Enum(RecordStatus), default=RecordStatus.ACTIVE, index=True
     )

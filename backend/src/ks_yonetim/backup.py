@@ -20,9 +20,17 @@ from .database import SessionLocal, engine
 from .models import AuditLog
 
 BACKUP_NAME_PATTERN = re.compile(
-    r"^ks-\d{8}-\d{6}-\d{6}-(automatic|manual|pre_restore|pre_import)\.db$"
+    r"^ks-\d{8}-\d{6}-\d{6}-(automatic|manual|pre_restore|pre_import|pre_migration|pre_finalize)\.db$"
 )
 AUTOMATIC_RETENTION = 30
+BACKUP_KINDS = {
+    "automatic",
+    "manual",
+    "pre_restore",
+    "pre_import",
+    "pre_migration",
+    "pre_finalize",
+}
 
 
 class BackupError(RuntimeError):
@@ -42,6 +50,7 @@ class BackupMetadata:
     sha256: str
     app_version: str
     integrity: str = "ok"
+    schema_revision: str | None = None
 
 
 class BackupManager:
@@ -107,6 +116,17 @@ class BackupManager:
                 {"integrity_result": result[0] if result else "no_result"},
             )
 
+    @staticmethod
+    def _schema_revision(path: Path) -> str | None:
+        try:
+            with closing(
+                sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True, timeout=15)
+            ) as connection:
+                row = connection.execute("SELECT version_num FROM alembic_version").fetchone()
+        except sqlite3.DatabaseError:
+            return None
+        return row[0] if row else None
+
     def _read_metadata(self, backup_path: Path) -> BackupMetadata:
         metadata_path = self._metadata_path(backup_path)
         if not metadata_path.is_file():
@@ -164,13 +184,13 @@ class BackupManager:
             source.backup(destination, pages=256, sleep=0.01)
             destination.commit()
 
-    def create(self, kind: str = "manual") -> BackupMetadata:
-        if kind not in {"automatic", "manual", "pre_restore", "pre_import"}:
+    def create(self, kind: str = "manual", source_path: Path | None = None) -> BackupMetadata:
+        if kind not in BACKUP_KINDS:
             raise BackupError("invalid_backup_kind", "Geçersiz yedek türü.")
         with self._lock:
             self._in_progress = True
             try:
-                source_path = self.database_path
+                source_path = source_path or self.database_path
                 if not source_path.is_file():
                     raise BackupError("database_missing", "Canlı veritabanı bulunamadı.")
                 now = datetime.now(UTC)
@@ -189,6 +209,7 @@ class BackupManager:
                         size_bytes=temp_path.stat().st_size,
                         sha256=self._sha256(temp_path),
                         app_version=__version__,
+                        schema_revision=self._schema_revision(temp_path),
                     )
                     metadata_temp.write_text(
                         json.dumps(asdict(metadata), ensure_ascii=False, indent=2),
