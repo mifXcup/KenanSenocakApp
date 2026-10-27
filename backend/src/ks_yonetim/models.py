@@ -93,10 +93,76 @@ class Project(TimestampMixin, Base):
     contract_amount_kurus: Mapped[int | None] = mapped_column(Integer)
     budget_kurus: Mapped[int | None] = mapped_column(Integer)
     project_state: Mapped[str] = mapped_column(String(32), default="active", index=True)
+    stage: Mapped[str] = mapped_column(String(32), default="planning", index=True)
+    progress_percent: Mapped[int] = mapped_column(Integer, default=0)
+    accent_color: Mapped[str] = mapped_column(String(16), default="#9A5A3A")
+    address: Mapped[str | None] = mapped_column(Text)
+    next_step: Mapped[str | None] = mapped_column(String(280))
     note: Mapped[str | None] = mapped_column(Text)
     status: Mapped[RecordStatus] = mapped_column(
         Enum(RecordStatus), default=RecordStatus.ACTIVE, index=True
     )
+
+
+class ProjectNote(TimestampMixin, Base):
+    __tablename__ = "project_notes"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    pinned: Mapped[bool] = mapped_column(default=False)
+    status: Mapped[RecordStatus] = mapped_column(Enum(RecordStatus), default=RecordStatus.ACTIVE)
+
+
+class ProjectTask(TimestampMixin, Base):
+    __tablename__ = "project_tasks"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    title: Mapped[str] = mapped_column(String(280), nullable=False)
+    due_date: Mapped[date | None] = mapped_column(Date, index=True)
+    task_state: Mapped[str] = mapped_column(String(24), default="todo", index=True)
+    waiting_on: Mapped[str | None] = mapped_column(String(180))
+    note: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[RecordStatus] = mapped_column(Enum(RecordStatus), default=RecordStatus.ACTIVE)
+
+
+class ProjectColor(TimestampMixin, Base):
+    __tablename__ = "project_colors"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    label: Mapped[str] = mapped_column(String(180), nullable=False)
+    color_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    material: Mapped[str | None] = mapped_column(String(180))
+    note: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[RecordStatus] = mapped_column(Enum(RecordStatus), default=RecordStatus.ACTIVE)
+
+
+class ProjectMeasurement(TimestampMixin, Base):
+    __tablename__ = "project_measurements"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    space_name: Mapped[str] = mapped_column(String(180), nullable=False)
+    label: Mapped[str] = mapped_column(String(180), nullable=False)
+    value: Mapped[str] = mapped_column(String(80), nullable=False)
+    unit: Mapped[str] = mapped_column(String(24), default="cm")
+    measured_on: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    note: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[RecordStatus] = mapped_column(Enum(RecordStatus), default=RecordStatus.ACTIVE)
+
+
+class ProjectVisit(TimestampMixin, Base):
+    __tablename__ = "project_visits"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    visit_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    purpose: Mapped[str] = mapped_column(String(280), nullable=False)
+    visit_state: Mapped[str] = mapped_column(String(24), default="planned", index=True)
+    note: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[RecordStatus] = mapped_column(Enum(RecordStatus), default=RecordStatus.ACTIVE)
 
 
 class Purchase(TimestampMixin, Base):
@@ -202,8 +268,36 @@ class Employee(TimestampMixin, Base):
     name: Mapped[str] = mapped_column(String(180), nullable=False, index=True)
     phone: Mapped[str | None] = mapped_column(String(40))
     role: Mapped[str | None] = mapped_column(String(120))
+    # Eski (v0.2.0) alan: yalnız günlük ücretli personelde current_rate_kurus aynasıdır.
     daily_rate_kurus: Mapped[int | None] = mapped_column(Integer)
+    employment_start_date: Mapped[date | None] = mapped_column(Date)
+    employment_end_date: Mapped[date | None] = mapped_column(Date)
+    employment_state: Mapped[str] = mapped_column(
+        String(16), default="active", server_default="active", index=True
+    )
+    wage_type: Mapped[str] = mapped_column(String(16), default="daily", server_default="daily")
+    current_rate_kurus: Mapped[int | None] = mapped_column(Integer)
+    iban: Mapped[str | None] = mapped_column(String(34))
+    payment_note: Mapped[str | None] = mapped_column(Text)
     note: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[RecordStatus] = mapped_column(
+        Enum(RecordStatus), default=RecordStatus.ACTIVE, index=True
+    )
+
+
+class EmployeeWageRate(TimestampMixin, Base):
+    __tablename__ = "employee_wage_rates"
+    __table_args__ = (Index("ix_wage_rate_employee_from", "employee_id", "effective_from"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    employee_id: Mapped[str] = mapped_column(
+        ForeignKey("employees.id", ondelete="RESTRICT"), nullable=False
+    )
+    effective_from: Mapped[date] = mapped_column(Date, nullable=False)
+    effective_to: Mapped[date | None] = mapped_column(Date)
+    wage_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    rate_kurus: Mapped[int] = mapped_column(Integer, nullable=False)
+    reason: Mapped[str | None] = mapped_column(String(255))
     status: Mapped[RecordStatus] = mapped_column(
         Enum(RecordStatus), default=RecordStatus.ACTIVE, index=True
     )
