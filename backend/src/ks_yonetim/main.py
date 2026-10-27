@@ -10,6 +10,7 @@ from .api import ApiError, api_error_handler, router, validation_error_handler
 from .backup import BackupError, backup_manager
 from .database import ensure_schema
 from .employees import router as employees_router
+from .finance import router as finance_router
 from .ml import router as ml_router
 from .operations import router as operations_router
 from .payroll import router as payroll_router
@@ -43,6 +44,7 @@ app.include_router(employees_router)
 app.include_router(operations_router)
 app.include_router(worklogs_router)
 app.include_router(payroll_router)
+app.include_router(finance_router)
 app.include_router(spreadsheet_router)
 app.include_router(ml_router)
 app.include_router(pdf_router)

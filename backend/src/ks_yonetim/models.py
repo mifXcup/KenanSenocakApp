@@ -393,3 +393,36 @@ class PayrollEntry(TimestampMixin, Base):
     status: Mapped[RecordStatus] = mapped_column(
         Enum(RecordStatus), default=RecordStatus.ACTIVE, index=True
     )
+
+
+class EmployeeFinancialMovement(TimestampMixin, Base):
+    __tablename__ = "employee_financial_movements"
+    __table_args__ = (
+        Index("ix_emp_movement_employee_date", "employee_id", "movement_date"),
+        Index("ix_emp_movement_period", "payroll_period_id", "movement_type"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    employee_id: Mapped[str] = mapped_column(
+        ForeignKey("employees.id", ondelete="RESTRICT"), nullable=False
+    )
+    payroll_period_id: Mapped[str | None] = mapped_column(
+        ForeignKey("payroll_periods.id", ondelete="RESTRICT")
+    )
+    project_id: Mapped[str | None] = mapped_column(ForeignKey("projects.id", ondelete="RESTRICT"))
+    site_id: Mapped[str | None] = mapped_column(ForeignKey("sites.id", ondelete="RESTRICT"))
+    movement_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    movement_type: Mapped[str] = mapped_column(String(24), nullable=False, index=True)
+    direction: Mapped[str] = mapped_column(String(24), nullable=False)
+    amount_kurus: Mapped[int] = mapped_column(Integer, nullable=False)
+    due_date: Mapped[date | None] = mapped_column(Date)
+    note: Mapped[str | None] = mapped_column(Text)
+    idempotency_key: Mapped[str] = mapped_column(String(120), nullable=False, unique=True)
+    # Bir hareket yalnız bir kez terslenebilir: veritabanı düzeyinde benzersizdir.
+    reversed_movement_id: Mapped[str | None] = mapped_column(
+        ForeignKey("employee_financial_movements.id", ondelete="RESTRICT"), unique=True
+    )
+    source: Mapped[str] = mapped_column(String(16), default="manual", server_default="manual")
+    status: Mapped[RecordStatus] = mapped_column(
+        Enum(RecordStatus), default=RecordStatus.ACTIVE, index=True
+    )

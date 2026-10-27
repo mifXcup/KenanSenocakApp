@@ -7,8 +7,6 @@ from sqlalchemy.orm import Session
 from .api import ApiError, add_audit, require_active, require_sidecar_token
 from .database import get_session
 from .models import (
-    Employee,
-    EmployeePayment,
     ExpenseCategory,
     Project,
     ProjectExpense,
@@ -18,8 +16,6 @@ from .models import (
     WorkLog,
 )
 from .schemas import (
-    EmployeePaymentCreate,
-    EmployeePaymentRead,
     ProjectCostSummary,
     ProjectExpenseCreate,
     ProjectExpenseRead,
@@ -59,49 +55,6 @@ def list_sites(
 def validate_site_project(site: Site, project_id: str | None) -> None:
     if site.project_id and site.project_id != project_id:
         raise ApiError("site_project_mismatch", "Şantiye seçilen projeye bağlı değil.", 409)
-
-
-@router.post("/employee-payments", response_model=EmployeePaymentRead, status_code=201)
-def create_employee_payment(
-    payload: EmployeePaymentCreate, session: Session = Depends(get_session)
-) -> EmployeePayment:
-    require_active(session, Employee, payload.employee_id, "Personel")
-    payment = EmployeePayment(**payload.model_dump())
-    session.add(payment)
-    session.flush()
-    add_audit(session, "employee_payment", payment.id, "created")
-    session.commit()
-    session.refresh(payment)
-    return payment
-
-
-@router.get("/employee-payments", response_model=list[EmployeePaymentRead])
-def list_employee_payments(
-    session: Session = Depends(get_session),
-    employee_id: str | None = None,
-    limit: int = Query(100, ge=1, le=500),
-    offset: int = Query(0, ge=0),
-):
-    query = select(EmployeePayment)
-    if employee_id:
-        query = query.where(EmployeePayment.employee_id == employee_id)
-    return session.scalars(
-        query.order_by(EmployeePayment.payment_date.desc(), EmployeePayment.created_at.desc())
-        .limit(limit)
-        .offset(offset)
-    ).all()
-
-
-@router.post("/employee-payments/{payment_id}/reverse", response_model=EmployeePaymentRead)
-def reverse_employee_payment(
-    payment_id: str, session: Session = Depends(get_session)
-) -> EmployeePayment:
-    payment = require_active(session, EmployeePayment, payment_id, "Personel ödemesi")
-    payment.status = RecordStatus.REVERSED
-    add_audit(session, "employee_payment", payment.id, "reversed")
-    session.commit()
-    session.refresh(payment)
-    return payment
 
 
 @router.post("/project-expenses", response_model=ProjectExpenseRead, status_code=201)

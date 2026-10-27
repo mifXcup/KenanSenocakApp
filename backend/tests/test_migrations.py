@@ -80,6 +80,22 @@ def test_v020_database_upgrades_without_data_loss(tmp_path):
         ("wl-1", "worked", 8, 0, 80000, None),
         ("wl-2", "worked", 4, 0, 45000, 45000),
     ]
+    # Eski personel ödemeleri deftere aynı kimlikle taşınır; eski tablo korunur.
+    assert query(
+        db_path,
+        "SELECT id, movement_type, direction, amount_kurus, source FROM employee_financial_movements "
+        "WHERE reversed_movement_id IS NULL ORDER BY id",
+    ) == [
+        ("ep-1", "advance", "employee_owes_company", 30000, "legacy"),
+        ("ep-2", "payroll_payment", "company_owes_employee", 20000, "legacy"),
+        ("ep-3", "advance", "employee_owes_company", 5000, "legacy"),
+    ]
+    assert query(
+        db_path,
+        "SELECT movement_type, reversed_movement_id FROM employee_financial_movements "
+        "WHERE reversed_movement_id IS NOT NULL",
+    ) == [("reversal", "ep-3")]
+    assert query(db_path, "SELECT COUNT(*) FROM employee_payments") == [(3,)]
     # Yükseltmeden önce doğrulanabilir yedek alındı ve eski şemayı taşıyor.
     backup = next(item for item in backup_manager.list() if item.backup_id == result["backup_id"])
     assert backup.kind == "pre_migration"
