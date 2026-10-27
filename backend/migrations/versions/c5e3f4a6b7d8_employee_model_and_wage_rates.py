@@ -82,19 +82,7 @@ def upgrade() -> None:
         )
     }
     now = datetime.now(UTC)
-    rate_table = sa.table(
-        "employee_wage_rates",
-        sa.column("id", sa.String),
-        sa.column("employee_id", sa.String),
-        sa.column("effective_from", sa.Date),
-        sa.column("effective_to", sa.Date),
-        sa.column("wage_type", sa.String),
-        sa.column("rate_kurus", sa.Integer),
-        sa.column("reason", sa.String),
-        sa.column("status", record_status),
-        sa.column("created_at", sa.DateTime(timezone=True)),
-        sa.column("updated_at", sa.DateTime(timezone=True)),
-    )
+    stamp = now.strftime("%Y-%m-%d %H:%M:%S.%f")
     rows = []
     for employee_id, created_at, rate in bind.execute(
         sa.text(
@@ -109,18 +97,26 @@ def upgrade() -> None:
             {
                 "id": f"legacy-rate-{employee_id}",
                 "employee_id": employee_id,
-                "effective_from": start,
+                "effective_from": start.isoformat(),
                 "effective_to": None,
                 "wage_type": "daily",
                 "rate_kurus": rate,
                 "reason": "v0.2.0 günlük ücretinden taşındı",
                 "status": "ACTIVE",
-                "created_at": now,
-                "updated_at": now,
+                "created_at": stamp,
+                "updated_at": stamp,
             }
         )
     if rows:
-        op.bulk_insert(rate_table, rows)
+        bind.execute(
+            sa.text(
+                "INSERT INTO employee_wage_rates (id, employee_id, effective_from, effective_to, "
+                "wage_type, rate_kurus, reason, status, created_at, updated_at) VALUES "
+                "(:id, :employee_id, :effective_from, :effective_to, :wage_type, :rate_kurus, "
+                ":reason, :status, :created_at, :updated_at)"
+            ),
+            rows,
+        )
 
 
 def downgrade() -> None:

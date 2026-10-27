@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from .api import ApiError, add_audit, require_sidecar_token
 from .database import get_session
+from .locks import assert_range_unlocked
 from .models import Employee, EmployeeWageRate, RecordStatus
 from .schemas import (
     EmployeeCreate,
@@ -175,6 +176,9 @@ def cancel_wage_rate(employee_id: str, rate_id: str, session: Session = Depends(
     rate = session.get(EmployeeWageRate, rate_id)
     if rate is None or rate.employee_id != employee.id or rate.status != RecordStatus.ACTIVE:
         raise ApiError("not_found", "Ücret kaydı bulunamadı.", 404)
+    assert_range_unlocked(
+        session, rate.effective_from, rate.effective_to or date.max, "Ücret iptali"
+    )
     rate.status = RecordStatus.CANCELLED
     add_audit(session, "employee_wage_rate", rate.id, "cancelled")
     session.flush()

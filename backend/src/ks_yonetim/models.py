@@ -5,7 +5,20 @@ import uuid
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
-from sqlalchemy import Date, DateTime, Enum, ForeignKey, Index, Integer, Numeric, String, Text
+from sqlalchemy import (
+    JSON,
+    Date,
+    DateTime,
+    Enum,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .database import Base
@@ -330,11 +343,33 @@ class WorkLog(TimestampMixin, Base):
     project_id: Mapped[str | None] = mapped_column(ForeignKey("projects.id", ondelete="RESTRICT"))
     site_id: Mapped[str | None] = mapped_column(ForeignKey("sites.id", ondelete="RESTRICT"))
     work_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    # hours = normal_hours + overtime_hours, amount_kurus = etkin maliyet (manuel varsa o, yoksa hesap).
     hours: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False)
     amount_kurus: Mapped[int] = mapped_column(Integer, nullable=False)
+    work_status: Mapped[str] = mapped_column(
+        String(16), default="worked", server_default="worked", index=True
+    )
+    normal_hours: Mapped[Decimal] = mapped_column(
+        Numeric(5, 2), default=Decimal(0), server_default="0"
+    )
+    overtime_hours: Mapped[Decimal] = mapped_column(
+        Numeric(5, 2), default=Decimal(0), server_default="0"
+    )
+    calculated_amount_kurus: Mapped[int | None] = mapped_column(Integer)
+    manual_amount_kurus: Mapped[int | None] = mapped_column(Integer)
     note: Mapped[str | None] = mapped_column(Text)
     status: Mapped[RecordStatus] = mapped_column(
         Enum(RecordStatus), default=RecordStatus.ACTIVE, index=True
+    )
+
+
+class AppSetting(Base):
+    __tablename__ = "app_settings"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[str] = mapped_column(String(255), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
     )
 
 
@@ -373,3 +408,126 @@ class ProjectExpense(TimestampMixin, Base):
     status: Mapped[RecordStatus] = mapped_column(
         Enum(RecordStatus), default=RecordStatus.ACTIVE, index=True
     )
+
+
+class PayrollPeriod(TimestampMixin, Base):
+    __tablename__ = "payroll_periods"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    period_start: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    period_end: Mapped[date] = mapped_column(Date, nullable=False)
+    title: Mapped[str] = mapped_column(String(180), nullable=False)
+    state: Mapped[str] = mapped_column(String(16), default="draft", index=True)
+    # Boşsa ayarlardaki fazla mesai oranı kullanılır.
+    overtime_multiplier_percent: Mapped[int | None] = mapped_column(Integer)
+    calculated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finalized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    status: Mapped[RecordStatus] = mapped_column(
+        Enum(RecordStatus), default=RecordStatus.ACTIVE, index=True
+    )
+
+
+class PayrollEntry(TimestampMixin, Base):
+    __tablename__ = "payroll_entries"
+    __table_args__ = (
+        UniqueConstraint("payroll_period_id", "employee_id", name="uq_payroll_entry_employee"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    payroll_period_id: Mapped[str] = mapped_column(
+        ForeignKey("payroll_periods.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    employee_id: Mapped[str] = mapped_column(
+        ForeignKey("employees.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    wage_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    base_rate_kurus: Mapped[int] = mapped_column(Integer, default=0)
+    normal_hours: Mapped[Decimal] = mapped_column(Numeric(8, 2), default=Decimal(0))
+    overtime_hours: Mapped[Decimal] = mapped_column(Numeric(8, 2), default=Decimal(0))
+    worked_days: Mapped[Decimal] = mapped_column(Numeric(6, 2), default=Decimal(0))
+    base_earning_kurus: Mapped[int] = mapped_column(Integer, default=0)
+    overtime_earning_kurus: Mapped[int] = mapped_column(Integer, default=0)
+    bonus_kurus: Mapped[int] = mapped_column(Integer, default=0)
+    additional_earning_kurus: Mapped[int] = mapped_column(Integer, default=0)
+    deduction_kurus: Mapped[int] = mapped_column(Integer, default=0)
+    advance_deduction_kurus: Mapped[int] = mapped_column(Integer, default=0)
+    gross_earning_kurus: Mapped[int] = mapped_column(Integer, default=0)
+    net_due_kurus: Mapped[int] = mapped_column(Integer, default=0)
+    paid_kurus: Mapped[int] = mapped_column(Integer, default=0)
+    remaining_kurus: Mapped[int] = mapped_column(Integer, default=0)
+    calculation_detail: Mapped[dict | None] = mapped_column(JSON)
+    status: Mapped[RecordStatus] = mapped_column(
+        Enum(RecordStatus), default=RecordStatus.ACTIVE, index=True
+    )
+
+
+class EmployeeFinancialMovement(TimestampMixin, Base):
+    __tablename__ = "employee_financial_movements"
+    __table_args__ = (
+        Index("ix_emp_movement_employee_date", "employee_id", "movement_date"),
+        Index("ix_emp_movement_period", "payroll_period_id", "movement_type"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    employee_id: Mapped[str] = mapped_column(
+        ForeignKey("employees.id", ondelete="RESTRICT"), nullable=False
+    )
+    payroll_period_id: Mapped[str | None] = mapped_column(
+        ForeignKey("payroll_periods.id", ondelete="RESTRICT")
+    )
+    project_id: Mapped[str | None] = mapped_column(ForeignKey("projects.id", ondelete="RESTRICT"))
+    site_id: Mapped[str | None] = mapped_column(ForeignKey("sites.id", ondelete="RESTRICT"))
+    movement_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    movement_type: Mapped[str] = mapped_column(String(24), nullable=False, index=True)
+    direction: Mapped[str] = mapped_column(String(24), nullable=False)
+    amount_kurus: Mapped[int] = mapped_column(Integer, nullable=False)
+    due_date: Mapped[date | None] = mapped_column(Date)
+    note: Mapped[str | None] = mapped_column(Text)
+    idempotency_key: Mapped[str] = mapped_column(String(120), nullable=False, unique=True)
+    # Bir hareket yalnız bir kez terslenebilir: veritabanı düzeyinde benzersizdir.
+    reversed_movement_id: Mapped[str | None] = mapped_column(
+        ForeignKey("employee_financial_movements.id", ondelete="RESTRICT"), unique=True
+    )
+    source: Mapped[str] = mapped_column(String(16), default="manual", server_default="manual")
+    status: Mapped[RecordStatus] = mapped_column(
+        Enum(RecordStatus), default=RecordStatus.ACTIVE, index=True
+    )
+
+
+class MlRun(Base):
+    __tablename__ = "ml_runs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    model_name: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    model_version: Mapped[str] = mapped_column(String(24), nullable=False)
+    trained_from: Mapped[date | None] = mapped_column(Date)
+    trained_to: Mapped[date | None] = mapped_column(Date)
+    sample_count: Mapped[int] = mapped_column(Integer, default=0)
+    parameters: Mapped[dict | None] = mapped_column(JSON)
+    metrics: Mapped[dict | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, index=True
+    )
+
+
+class MlPrediction(Base):
+    __tablename__ = "ml_predictions"
+    __table_args__ = (Index("ix_ml_prediction_entity", "prediction_type", "entity_id"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    ml_run_id: Mapped[str] = mapped_column(
+        ForeignKey("ml_runs.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    prediction_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    entity_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    entity_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    prediction_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    target_date: Mapped[date | None] = mapped_column(Date, index=True)
+    predicted_value: Mapped[float | None] = mapped_column(Float)
+    confidence: Mapped[float | None] = mapped_column(Float)
+    explanation: Mapped[dict | None] = mapped_column(JSON)
+    actual_value: Mapped[float | None] = mapped_column(Float)
+    evaluated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    user_feedback: Mapped[str | None] = mapped_column(String(24))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

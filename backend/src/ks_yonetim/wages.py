@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .api import ApiError, add_audit
+from .locks import assert_range_unlocked
 from .models import Employee, EmployeeWageRate, RecordStatus
 from .schemas import DEFAULT_RATE_START, WageRateCreate
 
@@ -70,6 +71,9 @@ def sync_employee_rate_cache(employee: Employee, book: RateBook, today: date) ->
 def add_wage_rate(
     session: Session, employee: Employee, payload: WageRateCreate, today: date
 ) -> EmployeeWageRate:
+    assert_range_unlocked(
+        session, payload.effective_from, payload.effective_to or date.max, "Ücret değişikliği"
+    )
     existing = session.scalars(
         select(EmployeeWageRate)
         .where(
