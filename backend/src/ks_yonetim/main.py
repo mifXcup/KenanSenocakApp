@@ -12,6 +12,7 @@ from .database import ensure_schema
 from .employees import router as employees_router
 from .ml import router as ml_router
 from .operations import router as operations_router
+from .payroll import router as payroll_router
 from .pdf_exports import router as pdf_router
 from .spreadsheet_io import router as spreadsheet_router
 from .worklogs import router as worklogs_router
@@ -41,6 +42,7 @@ app.include_router(router)
 app.include_router(employees_router)
 app.include_router(operations_router)
 app.include_router(worklogs_router)
+app.include_router(payroll_router)
 app.include_router(spreadsheet_router)
 app.include_router(ml_router)
 app.include_router(pdf_router)
