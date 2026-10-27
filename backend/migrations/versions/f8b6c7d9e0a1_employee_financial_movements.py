@@ -95,7 +95,7 @@ def upgrade() -> None:
     # v0.2.0 personel ödemeleri deftere aynı kimlikle taşınır; eski tablo olduğu gibi kalır.
     bind = op.get_bind()
     table = sa.table("employee_financial_movements", *[sa.column(name) for name in COLUMNS])
-    now = datetime.now(UTC)
+    stamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S.%f")
     originals, reversals = [], []
     for pid, employee_id, pay_date, amount, ptype, note, status in bind.execute(
         sa.text(
@@ -109,7 +109,7 @@ def upgrade() -> None:
             {
                 "id": pid,
                 "employee_id": employee_id,
-                "movement_date": day,
+                "movement_date": day.isoformat(),
                 "movement_type": "advance" if advance else "payroll_payment",
                 "direction": "employee_owes_company" if advance else "company_owes_employee",
                 "amount_kurus": amount,
@@ -118,8 +118,8 @@ def upgrade() -> None:
                 "reversed_movement_id": None,
                 "source": "legacy",
                 "status": "ACTIVE",
-                "created_at": now,
-                "updated_at": now,
+                "created_at": stamp,
+                "updated_at": stamp,
             }
         )
         if str(status).upper() == "REVERSED":
@@ -127,7 +127,7 @@ def upgrade() -> None:
                 {
                     "id": f"legacy-reversal-{pid}"[:36],
                     "employee_id": employee_id,
-                    "movement_date": day,
+                    "movement_date": day.isoformat(),
                     "movement_type": "reversal",
                     "direction": "company_owes_employee" if advance else "employee_owes_company",
                     "amount_kurus": amount,
@@ -136,8 +136,8 @@ def upgrade() -> None:
                     "reversed_movement_id": pid,
                     "source": "legacy",
                     "status": "ACTIVE",
-                    "created_at": now,
-                    "updated_at": now,
+                    "created_at": stamp,
+                    "updated_at": stamp,
                 }
             )
     if originals:

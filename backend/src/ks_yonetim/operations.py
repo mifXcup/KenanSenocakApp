@@ -1,22 +1,18 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .api import ApiError, add_audit, require_active, require_sidecar_token
 from .database import get_session
 from .models import (
-    ExpenseCategory,
     Project,
     ProjectExpense,
-    Purchase,
     RecordStatus,
     Site,
-    WorkLog,
 )
 from .schemas import (
-    ProjectCostSummary,
     ProjectExpenseCreate,
     ProjectExpenseRead,
     SiteCreate,
@@ -101,57 +97,3 @@ def cancel_project_expense(
     session.commit()
     session.refresh(expense)
     return expense
-
-
-def sum_value(session: Session, statement) -> int:
-    return int(session.scalar(statement) or 0)
-
-
-@router.get("/projects/{project_id}/cost-summary", response_model=ProjectCostSummary)
-def project_cost_summary(
-    project_id: str, session: Session = Depends(get_session)
-) -> ProjectCostSummary:
-    project = require_active(session, Project, project_id, "Proje")
-    purchase = sum_value(
-        session,
-        select(func.sum(Purchase.total_kurus)).where(
-            Purchase.project_id == project_id, Purchase.status == RecordStatus.ACTIVE
-        ),
-    )
-    labor = sum_value(
-        session,
-        select(func.sum(WorkLog.amount_kurus)).where(
-            WorkLog.project_id == project_id, WorkLog.status == RecordStatus.ACTIVE
-        ),
-    )
-    expenses = dict(
-        session.execute(
-            select(ProjectExpense.category, func.sum(ProjectExpense.amount_kurus))
-            .where(
-                ProjectExpense.project_id == project_id,
-                ProjectExpense.status == RecordStatus.ACTIVE,
-            )
-            .group_by(ProjectExpense.category)
-        ).all()
-    )
-    shipping = int(expenses.get(ExpenseCategory.SHIPPING, 0))
-    installation = int(expenses.get(ExpenseCategory.INSTALLATION, 0))
-    site = int(expenses.get(ExpenseCategory.SITE, 0))
-    other = int(expenses.get(ExpenseCategory.OTHER, 0))
-    total = purchase + labor + shipping + installation + site + other
-    return ProjectCostSummary(
-        project_id=project.id,
-        purchase_kurus=purchase,
-        labor_kurus=labor,
-        shipping_kurus=shipping,
-        installation_kurus=installation,
-        site_kurus=site,
-        other_kurus=other,
-        total_cost_kurus=total,
-        budget_kurus=project.budget_kurus,
-        budget_variance_kurus=(project.budget_kurus - total) if project.budget_kurus is not None else None,
-        contract_amount_kurus=project.contract_amount_kurus,
-        estimated_profit_kurus=(project.contract_amount_kurus - total)
-        if project.contract_amount_kurus is not None
-        else None,
-    )
