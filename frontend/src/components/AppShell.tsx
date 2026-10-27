@@ -4,12 +4,14 @@ import {
   Archive,
   Buildings,
   ChartLineUp,
+  ClipboardText,
   GearSix,
   House,
   MagnifyingGlass,
   Package,
   Plus,
   Receipt,
+  Sparkle,
   Toolbox,
   UsersThree,
 } from '@phosphor-icons/react'
@@ -17,14 +19,24 @@ import { Button } from './ui'
 import { useCoreData } from '../hooks/useCoreData'
 
 const navigation = [
-  { to: '/', label: 'Genel Bakış', icon: House },
-  { to: '/projeler', label: 'Projeler', icon: Buildings },
-  { to: '/satin-almalar', label: 'Satın Almalar', icon: Receipt },
-  { to: '/firmalar', label: 'Firmalar', icon: UsersThree },
-  { to: '/malzemeler', label: 'Malzemeler', icon: Package },
-  { to: '/personel', label: 'Personel ve Şantiye', icon: Toolbox },
-  { to: '/raporlar', label: 'Raporlar', icon: ChartLineUp },
-  { to: '/ayarlar', label: 'Ayarlar', icon: GearSix },
+  { label: 'Operasyon', items: [
+    { to: '/', label: 'Genel Bakış', icon: House },
+    { to: '/is-takibi', label: 'İş Takibi', icon: ClipboardText },
+    { to: '/projeler', label: 'Projeler', icon: Buildings },
+    { to: '/satin-almalar', label: 'Satın Almalar', icon: Receipt },
+  ] },
+  { label: 'Kayıtlar', items: [
+    { to: '/firmalar', label: 'Firmalar', icon: UsersThree },
+    { to: '/malzemeler', label: 'Malzemeler', icon: Package },
+    { to: '/personel', label: 'Personel ve Şantiye', icon: Toolbox },
+  ] },
+  { label: 'Analiz', items: [
+    { to: '/raporlar', label: 'Raporlar', icon: ChartLineUp },
+    { to: '/akilli-ongoruler', label: 'Akıllı Öngörüler', icon: Sparkle },
+  ] },
+  { label: 'Sistem', items: [
+    { to: '/ayarlar', label: 'Ayarlar', icon: GearSix },
+  ] },
 ]
 
 export function AppShell({ children, onQuickPurchase }: { children: ReactNode; onQuickPurchase: () => void }) {
@@ -62,18 +74,18 @@ export function AppShell({ children, onQuickPurchase }: { children: ReactNode; o
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [navigate, onQuickPurchase])
 
-  const current = navigation.find((item) => item.to === location.pathname)?.label ?? 'Kenan Şenocak Yönetim'
+  const current = navigation.flatMap((group) => group.items).find((item) => item.to === location.pathname)?.label ?? 'Kenan Şenocak Yönetim'
 
   return (
     <div className="app-shell">
       <aside className="sidebar">
         <div className="brand"><span className="brand__mark">KŞ</span><span><strong>Kenan Şenocak</strong><small>Yönetim</small></span></div>
         <nav aria-label="Ana navigasyon">
-          {navigation.map(({ to, label, icon: Icon }) => (
-            <NavLink key={to} to={to} end={to === '/'} className={({ isActive }) => `nav-item ${isActive ? 'nav-item--active' : ''}`} title={label}>
-              <Icon size={20} weight="regular" aria-hidden="true" /><span>{label}</span>
-            </NavLink>
-          ))}
+          {navigation.map((group) => <div className="nav-group" key={group.label}><span className="nav-group__label">{group.label}</span>{group.items.map(({ to, label, icon: Icon }) => (
+              <NavLink key={to} to={to} end={to === '/'} className={({ isActive }) => `nav-item ${isActive ? 'nav-item--active' : ''}`} title={label}>
+                <Icon size={19} weight="regular" aria-hidden="true" /><span>{label}</span>
+              </NavLink>
+            ))}</div>)}
         </nav>
         <div className="sidebar__footer"><Archive size={18} /><span>Veriler bu bilgisayarda</span></div>
       </aside>

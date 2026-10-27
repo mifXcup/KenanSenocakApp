@@ -1,6 +1,6 @@
 import { useMemo, useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowRight, ChartBar, Plus, Receipt, ShieldCheck } from '@phosphor-icons/react'
+import { ArrowRight, ChartBar, Plus, Receipt, ShieldCheck, Sparkle } from '@phosphor-icons/react'
 import { apiRequest, formatDate, formatMoney, makeIdempotencyKey, toKurus } from './lib/api'
 import type { DesktopInfo, Material, Project, Purchase, Supplier, SupplierBalance, TrackingMode } from './lib/types'
 import { Button, ConfidenceBadge, EmptyState, ErrorState, Field, LoadingRows, MoneyValue, PageHeader, SelectInput, SideSheet, StatusBanner, TextInput } from './components/ui'
@@ -53,7 +53,7 @@ export function DashboardPage({ onNewPurchase }: { onNewPurchase: () => void }) 
             <section className="panel"><div className="panel__header"><h2>Son satın almalar</h2><a href="#/satin-almalar">Tümünü gör <ArrowRight size={16} /></a></div>
               {!data.purchases.data?.length ? <p className="muted">Henüz satın alma kaydı yok.</p> : <RecentPurchases purchases={data.purchases.data.slice(0, 6)} suppliers={data.suppliers.data ?? []} materials={data.materials.data ?? []} />}
             </section>
-            <section className="panel panel--quiet"><div className="panel__header"><h2>Karar desteği</h2><ChartBar size={20} /></div><p className="muted">Tahmin için yeterli geçmiş yok. Sistem veri biriktikçe fiyat ve maliyet eğilimlerini burada açıklayacak.</p></section>
+            <section className="panel panel--quiet"><div className="panel__header"><h2>Karar desteği</h2><ChartBar size={20} /></div><p className="muted">Fiyat değişimlerini, yeniden alım tarihlerini ve proje bütçe riskini yerel verinizle inceleyin.</p><a className="panel-link" href="#/akilli-ongoruler"><Sparkle size={16} />Akıllı öngörüleri aç</a></section>
           </div>
         </>
       )}
@@ -99,7 +99,7 @@ export function PurchasesPage({ onNewPurchase }: { onNewPurchase: () => void }) 
   const project = Object.fromEntries((data.projects.data ?? []).map((x) => [x.id, x.name]))
   return <div className="page"><PageHeader title="Satın Almalar" description="Ne aldığınızı, kimden aldığınızı ve projeye etkisini izleyin." action={<Button variant="primary" onClick={onNewPurchase}><Plus size={18} />Satın alma ekle</Button>} />
     <QueryState query={data.purchases} empty={<EmptyState title="Satın alma kaydı yok" description="KDV ve fatura ayrıntıları olmadan, yalnız operasyon için gereken alış bilgisini kaydedin." action={<Button onClick={onNewPurchase}>İlk kaydı ekle</Button>} />}>
-      <DataTable label="Satın almalar"><thead><tr><th>Tarih</th><th>Firma</th><th>Malzeme</th><th className="number">Miktar</th><th className="number">Toplam</th><th>Vade</th><th>Proje</th><th>Durum</th></tr></thead><tbody>{data.purchases.data?.map((item) => <tr key={item.id}><td>{formatDate(item.purchase_date)}</td><td>{supplier[item.supplier_id] ?? 'Bilinmiyor'}</td><td>{material[item.material_id] ?? 'Bilinmiyor'}</td><td className="number">{item.quantity ? `${item.quantity} ${item.unit ?? ''}` : 'Yalnız tutar'}</td><td className="number"><MoneyValue value={item.total_kurus} /></td><td>{item.due_date ? formatDate(item.due_date) : "—"}</td><td>{item.project_id ? project[item.project_id] ?? 'Bilinmiyor' : 'Genel'}</td><td><span className="badge badge--neutral">Aktif</span></td></tr>)}</tbody></DataTable>
+      <DataTable label="Satın almalar"><thead><tr><th>Tarih</th><th>Firma</th><th>Malzeme</th><th className="number">Miktar</th><th className="number">Toplam</th><th>Vade</th><th>Proje</th><th>Durum</th></tr></thead><tbody>{data.purchases.data?.map((item) => <tr key={item.id}><td>{formatDate(item.purchase_date)}</td><td>{supplier[item.supplier_id] ?? 'Bilinmiyor'}</td><td>{material[item.material_id] ?? 'Bilinmiyor'}</td><td className="number">{item.quantity ? `${item.quantity} ${item.unit ?? ''}` : 'Yalnız tutar'}</td><td className="number"><MoneyValue value={item.total_kurus} /></td><td>{item.due_date ? formatDate(item.due_date) : "Girilmedi"}</td><td>{item.project_id ? project[item.project_id] ?? 'Bilinmiyor' : 'Genel'}</td><td><span className="badge badge--neutral">Aktif</span></td></tr>)}</tbody></DataTable>
     </QueryState>
   </div>
 }
@@ -128,8 +128,6 @@ export function MaterialsPage() {
     <SideSheet title="Yeni malzeme" open={open} onClose={() => setOpen(false)} footer={<><Button onClick={() => setOpen(false)}>Vazgeç</Button><Button variant="primary" loading={mutation.isPending} onClick={() => mutation.mutate()}>Kaydet</Button></>}><div className="form-stack"><Field label="Malzeme adı"><TextInput value={name} onChange={(e) => setName(e.target.value)} /></Field><Field label="Varsayılan birim"><SelectInput value={unit} onChange={(e) => setUnit(e.target.value)}><option>adet</option><option>kg</option><option>metre</option><option>m²</option><option>levha</option><option>kutu</option><option>litre</option><option>paket</option></SelectInput></Field><Field label="Takip şekli"><SelectInput value={mode} onChange={(e) => setMode(e.target.value as TrackingMode)}><option value="exact">Kesin</option><option value="estimated">Yaklaşık</option><option value="value_only">Yalnız tutar</option></SelectInput></Field>{mutation.error && <span className="form-error">{mutation.error.message}</span>}</div></SideSheet>
   </div>
 }
-
-export function PersonnelPage() { return <div className="page"><PageHeader title="Personel ve Şantiye" description="İşçilik ve saha hareketleri için planlanan çalışma alanı." /><EmptyState title="Bu modül henüz etkin değil" description="Personel maliyeti ve şantiye ziyaretleri backend sözleşmesi tamamlandığında burada açılacak. Çalışmayan kontrol gösterilmiyor." /></div> }
 
 export function SettingsPage() {
   const info = useQuery<DesktopInfo>({ queryKey: ['desktop-info'], queryFn: async () => { if (!window.ksDesktop) throw new Error('Masaüstü köprüsü bulunamadı.'); return window.ksDesktop.app.getInfo() } })

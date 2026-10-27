@@ -136,12 +136,12 @@ function DebtAging() {
 
             <section className="panel"><div className="panel__header"><h2>Firmaya göre açık borç</h2></div>
               <div className="table-wrap"><table aria-label="Firmaya göre borç yaşlandırma"><thead><tr><th>Firma</th>{report.data.buckets.map((b) => <th className="number" key={b.key} title={b.label}>{shortLabel[b.key]}</th>)}<th className="number">Toplam</th></tr></thead>
-                <tbody>{report.data.suppliers.map((s) => <tr key={s.supplier_id}><td><strong>{s.supplier_name}</strong>{s.credit_kurus > 0 && <small>Avans: <MoneyValue value={s.credit_kurus} /></small>}</td>{report.data!.buckets.map((b) => <td className="number" key={b.key}>{s.buckets[b.key] ? <MoneyValue value={s.buckets[b.key]} /> : '—'}</td>)}<td className="number"><MoneyValue value={s.total_open_kurus} /></td></tr>)}</tbody></table></div>
+                <tbody>{report.data.suppliers.map((s) => <tr key={s.supplier_id}><td><strong>{s.supplier_name}</strong>{s.credit_kurus > 0 && <small>Avans: <MoneyValue value={s.credit_kurus} /></small>}</td>{report.data!.buckets.map((b) => <td className="number" key={b.key}>{s.buckets[b.key] ? <MoneyValue value={s.buckets[b.key]} /> : 'Yok'}</td>)}<td className="number"><MoneyValue value={s.total_open_kurus} /></td></tr>)}</tbody></table></div>
             </section>
 
             <section className="panel"><div className="panel__header"><h2>Açık alışlar</h2><span className="caption">Vadesi en yakın olan üstte</span></div>
               <div className="table-wrap"><table aria-label="Açık alışlar"><thead><tr><th>Firma</th><th>Malzeme</th><th>Alış tarihi</th><th>Vade</th><th className="number">Gecikme</th><th className="number">Kalan</th></tr></thead>
-                <tbody>{report.data.items.map((i) => <tr key={i.purchase_id}><td><strong>{i.supplier_name}</strong></td><td>{i.material_name}</td><td>{formatDate(i.purchase_date)}</td><td>{i.due_date ? formatDate(i.due_date) : 'Girilmedi'}</td><td className="number">{i.days_overdue ? `${i.days_overdue} gün` : '—'}</td><td className="number"><MoneyValue value={i.remaining_kurus} /></td></tr>)}</tbody></table></div>
+                <tbody>{report.data.items.map((i) => <tr key={i.purchase_id}><td><strong>{i.supplier_name}</strong></td><td>{i.material_name}</td><td>{formatDate(i.purchase_date)}</td><td>{i.due_date ? formatDate(i.due_date) : 'Girilmedi'}</td><td className="number">{i.days_overdue ? `${i.days_overdue} gün` : 'Yok'}</td><td className="number"><MoneyValue value={i.remaining_kurus} /></td></tr>)}</tbody></table></div>
             </section>
           </>
         )

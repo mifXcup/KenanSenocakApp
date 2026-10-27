@@ -173,3 +173,106 @@ export interface RestoreResult {
   pre_restore_backup: BackupRecord
   restart_required: true
 }
+
+export interface Employee {
+  id: string
+  name: string
+  phone: string | null
+  role: string | null
+  daily_rate_kurus: number | null
+  wage_type?: 'monthly' | 'daily' | 'hourly'
+  current_rate_kurus?: number | null
+  employment_start_date?: string | null
+  employment_end_date?: string | null
+  employment_state?: 'active' | 'inactive' | 'left'
+  iban?: string | null
+  payment_note?: string | null
+  note: string | null
+  status: RecordStatus
+}
+
+export interface Site {
+  id: string
+  project_id: string | null
+  name: string
+  address: string | null
+  note: string | null
+  status: RecordStatus
+}
+
+export interface WorkLog {
+  id: string
+  employee_id: string
+  project_id: string | null
+  site_id: string | null
+  work_date: string
+  hours: string
+  amount_kurus: number
+  note: string | null
+  status: RecordStatus
+}
+
+export interface EmployeePayment {
+  id: string
+  employee_id: string
+  payment_date: string
+  amount_kurus: number
+  payment_type: 'advance' | 'wage'
+  note: string | null
+  status: RecordStatus
+}
+
+export interface MLStatus {
+  ready: boolean
+  purchase_count: number
+  material_series_ready: number
+  reorder_series_ready: number
+  project_series_ready: number
+  minimum_price_samples: number
+  minimum_reorder_samples: number
+  message: string
+}
+
+export interface PriceAnomaly {
+  material_id: string
+  material_name: string
+  unit: string
+  sample_count: number
+  latest_date: string
+  latest_unit_price_kurus: number
+  expected_unit_price_kurus: number
+  deviation_percent: number
+  anomaly_score: number
+  is_anomaly: boolean
+  next_expected_unit_price_kurus: number
+}
+
+export interface ReorderForecast {
+  material_id: string
+  material_name: string
+  sample_count: number
+  median_interval_days: number
+  next_expected_date: string
+  days_until_expected: number
+  confidence: string
+}
+
+export interface ProjectRisk {
+  project_id: string
+  project_name: string
+  sample_count: number
+  current_cost_kurus: number
+  budget_kurus: number
+  projected_30d_cost_kurus: number
+  budget_usage_percent: number
+  projected_usage_percent: number
+  risk_level: string
+}
+
+export interface MLInsights {
+  as_of: string
+  status: MLStatus
+  price_anomalies: PriceAnomaly[]
+  reorder_forecasts: ReorderForecast[]
+  project_risks: ProjectRisk[]
+}
