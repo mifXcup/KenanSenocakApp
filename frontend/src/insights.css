@@ -1,0 +1,35 @@
+.insight-toolbar {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 2px;
+}
+
+.insight-toolbar > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.insight-filter {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 10px;
+  color: var(--text-secondary);
+  background: white;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  font-size: 11px;
+  font-weight: 620;
+  cursor: pointer;
+}
+
+.insight-filter:hover { border-color: var(--border-strong); color: var(--text-primary); }
+.insight-filter--active { color: var(--wood-600); background: var(--wood-50); border-color: color-mix(in oklch, var(--wood-500) 24%, white); }
+.signal-row > div:nth-child(2) small { display: block; margin-top: 4px; color: var(--text-secondary); font-size: 9px; }
