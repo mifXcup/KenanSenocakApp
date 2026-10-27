@@ -71,6 +71,15 @@ def test_v020_database_upgrades_without_data_loss(tmp_path):
         "FROM employee_wage_rates",
     )
     assert rates == [("emp-1", "2026-09-10", None, "daily", 80000)]
+    # Eski çalışma kayıtları: süre normal saate taşınır; formülle üretilemeyen tutar manuel sayılır.
+    assert query(
+        db_path,
+        "SELECT id, work_status, normal_hours, overtime_hours, calculated_amount_kurus, "
+        "manual_amount_kurus FROM work_logs ORDER BY id",
+    ) == [
+        ("wl-1", "worked", 8, 0, 80000, None),
+        ("wl-2", "worked", 4, 0, 45000, 45000),
+    ]
     # Yükseltmeden önce doğrulanabilir yedek alındı ve eski şemayı taşıyor.
     backup = next(item for item in backup_manager.list() if item.backup_id == result["backup_id"])
     assert backup.kind == "pre_migration"

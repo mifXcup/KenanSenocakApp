@@ -14,6 +14,7 @@ from .ml import router as ml_router
 from .operations import router as operations_router
 from .pdf_exports import router as pdf_router
 from .spreadsheet_io import router as spreadsheet_router
+from .worklogs import router as worklogs_router
 
 
 @asynccontextmanager
@@ -39,6 +40,7 @@ app.add_exception_handler(RequestValidationError, validation_error_handler)
 app.include_router(router)
 app.include_router(employees_router)
 app.include_router(operations_router)
+app.include_router(worklogs_router)
 app.include_router(spreadsheet_router)
 app.include_router(ml_router)
 app.include_router(pdf_router)

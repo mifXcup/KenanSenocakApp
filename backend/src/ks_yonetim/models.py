@@ -264,11 +264,33 @@ class WorkLog(TimestampMixin, Base):
     project_id: Mapped[str | None] = mapped_column(ForeignKey("projects.id", ondelete="RESTRICT"))
     site_id: Mapped[str | None] = mapped_column(ForeignKey("sites.id", ondelete="RESTRICT"))
     work_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    # hours = normal_hours + overtime_hours, amount_kurus = etkin maliyet (manuel varsa o, yoksa hesap).
     hours: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False)
     amount_kurus: Mapped[int] = mapped_column(Integer, nullable=False)
+    work_status: Mapped[str] = mapped_column(
+        String(16), default="worked", server_default="worked", index=True
+    )
+    normal_hours: Mapped[Decimal] = mapped_column(
+        Numeric(5, 2), default=Decimal(0), server_default="0"
+    )
+    overtime_hours: Mapped[Decimal] = mapped_column(
+        Numeric(5, 2), default=Decimal(0), server_default="0"
+    )
+    calculated_amount_kurus: Mapped[int | None] = mapped_column(Integer)
+    manual_amount_kurus: Mapped[int | None] = mapped_column(Integer)
     note: Mapped[str | None] = mapped_column(Text)
     status: Mapped[RecordStatus] = mapped_column(
         Enum(RecordStatus), default=RecordStatus.ACTIVE, index=True
+    )
+
+
+class AppSetting(Base):
+    __tablename__ = "app_settings"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[str] = mapped_column(String(255), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
     )
 
 

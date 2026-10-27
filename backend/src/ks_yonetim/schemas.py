@@ -504,14 +504,63 @@ class SiteRead(OrmModel):
     status: RecordStatus
 
 
+class ImportIssue(BaseModel):
+    row: int
+    field: str | None = None
+    message: str
+
+
+WorkStatus = Literal["worked", "half_day", "overtime", "paid_leave", "unpaid_leave", "absent"]
+
+
 class WorkLogCreate(BaseModel):
     employee_id: str
     project_id: str | None = None
     site_id: str | None = None
     work_date: date
-    hours: Decimal = Field(gt=0, le=24, decimal_places=2)
+    work_status: WorkStatus = "worked"
+    normal_hours: Decimal | None = Field(default=None, ge=0, le=24, decimal_places=2)
+    overtime_hours: Decimal = Field(default=Decimal(0), ge=0, le=24, decimal_places=2)
+    manual_amount_kurus: int | None = Field(default=None, ge=0)
+    # v0.2.0 istemcileri için eski alanlar: hours -> normal_hours, amount_kurus -> manuel tutar.
+    hours: Decimal | None = Field(default=None, gt=0, le=24, decimal_places=2)
     amount_kurus: int | None = Field(default=None, ge=0)
     note: str | None = Field(default=None, max_length=2000)
+
+    @model_validator(mode="after")
+    def merge_legacy_fields(self) -> WorkLogCreate:
+        if self.hours is not None:
+            if self.normal_hours not in (None, self.hours):
+                raise ValueError("hours ve normal_hours uyuşmuyor.")
+            self.normal_hours = self.hours
+        if self.amount_kurus is not None:
+            if self.manual_amount_kurus not in (None, self.amount_kurus):
+                raise ValueError("amount_kurus ve manual_amount_kurus uyuşmuyor.")
+            self.manual_amount_kurus = self.amount_kurus
+        return self
+
+
+class WorkLogUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    work_date: date | None = None
+    work_status: WorkStatus | None = None
+    normal_hours: Decimal | None = Field(default=None, ge=0, le=24, decimal_places=2)
+    overtime_hours: Decimal | None = Field(default=None, ge=0, le=24, decimal_places=2)
+    project_id: str | None = None
+    site_id: str | None = None
+    manual_amount_kurus: int | None = Field(default=None, ge=0)
+    note: str | None = Field(default=None, max_length=2000)
+
+    @model_validator(mode="after")
+    def validate_patch(self) -> WorkLogUpdate:
+        if not self.model_fields_set:
+            raise ValueError("En az bir alan gönderilmelidir.")
+        if "work_date" in self.model_fields_set and self.work_date is None:
+            raise ValueError("work_date boş bırakılamaz.")
+        if "work_status" in self.model_fields_set and self.work_status is None:
+            raise ValueError("work_status boş bırakılamaz.")
+        return self
 
 
 class WorkLogRead(OrmModel):
@@ -520,10 +569,53 @@ class WorkLogRead(OrmModel):
     project_id: str | None
     site_id: str | None
     work_date: date
+    work_status: str
+    normal_hours: Decimal
+    overtime_hours: Decimal
     hours: Decimal
     amount_kurus: int
+    calculated_amount_kurus: int | None
+    manual_amount_kurus: int | None
     note: str | None
     status: RecordStatus
+
+
+class LaborSettingsRead(BaseModel):
+    overtime_multiplier_percent: int
+    standard_day_hours: int
+
+
+class LaborSettingsUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    overtime_multiplier_percent: int | None = Field(default=None, ge=100, le=500)
+    standard_day_hours: int | None = Field(default=None, ge=1, le=24)
+
+    @model_validator(mode="after")
+    def validate_patch(self) -> LaborSettingsUpdate:
+        if not self.model_fields_set or any(
+            getattr(self, name) is None for name in self.model_fields_set
+        ):
+            raise ValueError("En az bir ayar geçerli bir değerle gönderilmelidir.")
+        return self
+
+
+class WorkLogImportPreview(BaseModel):
+    total_rows: int
+    valid_rows: int
+    invalid_rows: int
+    duplicate_rows: int
+    total_labor_kurus: int
+    issues: list[ImportIssue]
+    duplicates: list[ImportIssue]
+    sample: list[dict]
+
+
+class WorkLogImportResult(BaseModel):
+    created: int
+    skipped_duplicates: int
+    total_labor_kurus: int
+    backup_id: str
 
 
 class EmployeePaymentCreate(BaseModel):
@@ -588,12 +680,6 @@ class SpreadsheetFileResponse(BaseModel):
     file_name: str
     mime_type: str
     content_base64: str
-
-
-class ImportIssue(BaseModel):
-    row: int
-    field: str | None = None
-    message: str
 
 
 class ImportPreview(BaseModel):
