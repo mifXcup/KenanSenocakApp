@@ -22,7 +22,7 @@ const navigation = [
   { label: 'Operasyon', items: [
     { to: '/', label: 'Genel Bakış', icon: House },
     { to: '/is-takibi', label: 'İş Takibi', icon: ClipboardText },
-    { to: '/projeler', label: 'Projeler', icon: Buildings },
+    { to: '/projeler', label: 'Proje Takip', icon: Buildings },
     { to: '/satin-almalar', label: 'Satın Almalar', icon: Receipt },
   ] },
   { label: 'Kayıtlar', items: [

@@ -22,6 +22,11 @@ from .models import (
     MovementType,
     Payment,
     Project,
+    ProjectColor,
+    ProjectMeasurement,
+    ProjectNote,
+    ProjectTask,
+    ProjectVisit,
     Purchase,
     RecordStatus,
     Supplier,
@@ -42,9 +47,21 @@ from .schemas import (
     MovementRead,
     PaymentCreate,
     PaymentRead,
+    ProjectColorCreate,
+    ProjectColorRead,
     ProjectCreate,
+    ProjectHubRead,
+    ProjectMeasurementCreate,
+    ProjectMeasurementRead,
+    ProjectNoteCreate,
+    ProjectNoteRead,
     ProjectRead,
+    ProjectTaskCreate,
+    ProjectTaskRead,
+    ProjectTaskUpdate,
     ProjectUpdate,
+    ProjectVisitCreate,
+    ProjectVisitRead,
     PurchaseCreate,
     PurchaseDetail,
     PurchaseRead,
@@ -419,6 +436,78 @@ def list_projects(
         .limit(limit)
         .offset(offset)
     ).all()
+
+
+@router.get(
+    "/projects/{project_id}/hub",
+    response_model=ProjectHubRead,
+    dependencies=[Depends(require_sidecar_token)],
+)
+def get_project_hub(project_id: str, session: Session = Depends(get_session)):
+    project = require_active(session, Project, project_id, "Proje")
+
+    def active_rows(model, order_by):
+        return session.scalars(
+            select(model)
+            .where(model.project_id == project_id, model.status == RecordStatus.ACTIVE)
+            .order_by(order_by)
+        ).all()
+
+    return {
+        "project": project,
+        "notes": active_rows(ProjectNote, ProjectNote.created_at.desc()),
+        "tasks": active_rows(ProjectTask, ProjectTask.created_at.desc()),
+        "colors": active_rows(ProjectColor, ProjectColor.created_at.desc()),
+        "measurements": active_rows(ProjectMeasurement, ProjectMeasurement.measured_on.desc()),
+        "visits": active_rows(ProjectVisit, ProjectVisit.visit_date.asc()),
+    }
+
+
+def add_project_child(session: Session, project_id: str, model, payload, label: str):
+    require_active(session, Project, project_id, "Proje")
+    entity = model(project_id=project_id, **payload.model_dump())
+    session.add(entity)
+    session.flush()
+    add_audit(session, model.__tablename__, entity.id, "created", {"project_id": project_id})
+    session.commit()
+    session.refresh(entity)
+    return entity
+
+
+@router.post("/projects/{project_id}/notes", response_model=ProjectNoteRead, status_code=201, dependencies=[Depends(require_sidecar_token)])
+def create_project_note(project_id: str, payload: ProjectNoteCreate, session: Session = Depends(get_session)):
+    return add_project_child(session, project_id, ProjectNote, payload, "Not")
+
+
+@router.post("/projects/{project_id}/tasks", response_model=ProjectTaskRead, status_code=201, dependencies=[Depends(require_sidecar_token)])
+def create_project_task(project_id: str, payload: ProjectTaskCreate, session: Session = Depends(get_session)):
+    return add_project_child(session, project_id, ProjectTask, payload, "İş")
+
+
+@router.patch("/project-tasks/{task_id}", response_model=ProjectTaskRead, dependencies=[Depends(require_sidecar_token)])
+def update_project_task(task_id: str, payload: ProjectTaskUpdate, session: Session = Depends(get_session)):
+    task = require_active(session, ProjectTask, task_id, "İş")
+    before = task.task_state
+    task.task_state = payload.task_state
+    add_audit(session, "project_tasks", task.id, "updated", {"before": before, "after": payload.task_state})
+    session.commit()
+    session.refresh(task)
+    return task
+
+
+@router.post("/projects/{project_id}/colors", response_model=ProjectColorRead, status_code=201, dependencies=[Depends(require_sidecar_token)])
+def create_project_color(project_id: str, payload: ProjectColorCreate, session: Session = Depends(get_session)):
+    return add_project_child(session, project_id, ProjectColor, payload, "Renk")
+
+
+@router.post("/projects/{project_id}/measurements", response_model=ProjectMeasurementRead, status_code=201, dependencies=[Depends(require_sidecar_token)])
+def create_project_measurement(project_id: str, payload: ProjectMeasurementCreate, session: Session = Depends(get_session)):
+    return add_project_child(session, project_id, ProjectMeasurement, payload, "Ölçü")
+
+
+@router.post("/projects/{project_id}/visits", response_model=ProjectVisitRead, status_code=201, dependencies=[Depends(require_sidecar_token)])
+def create_project_visit(project_id: str, payload: ProjectVisitCreate, session: Session = Depends(get_session)):
+    return add_project_child(session, project_id, ProjectVisit, payload, "Ziyaret")
 
 
 def purchase_paid(session: Session, purchase_id: str) -> int:

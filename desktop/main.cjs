@@ -9,6 +9,7 @@ const API_HOST = '127.0.0.1'
 const SIDECAR_TOKEN = crypto.randomBytes(32).toString('hex')
 const ALLOWED_METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'])
 let mainWindow
+let projectBarWindow
 let backendProcess
 let apiPort
 
@@ -196,11 +197,85 @@ function createWindow() {
   }
 }
 
+function rendererTarget(hash = '') {
+  if (process.env.VITE_DEV_SERVER_URL) return `${process.env.VITE_DEV_SERVER_URL}${hash}`
+  return { file: path.join(__dirname, '..', 'frontend', 'dist', 'index.html'), hash: hash.replace(/^#/, '') }
+}
+
+function loadRenderer(window, hash = '') {
+  const target = rendererTarget(hash)
+  if (typeof target === 'string') window.loadURL(target)
+  else window.loadFile(target.file, { hash: target.hash })
+}
+
+function createProjectBar() {
+  if (projectBarWindow && !projectBarWindow.isDestroyed()) {
+    projectBarWindow.show()
+    projectBarWindow.focus()
+    return projectBarWindow
+  }
+  projectBarWindow = new BrowserWindow({
+    width: 360,
+    height: 560,
+    minWidth: 340,
+    minHeight: 104,
+    maxWidth: 440,
+    frame: false,
+    resizable: false,
+    movable: true,
+    alwaysOnTop: true,
+    skipTaskbar: false,
+    backgroundColor: '#F7F3ED',
+    show: false,
+    title: 'Proje Barı',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.cjs'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  })
+  projectBarWindow.removeMenu()
+  projectBarWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+  projectBarWindow.webContents.on('will-navigate', (event, targetUrl) => {
+    if (!isTrustedRendererUrl(targetUrl)) event.preventDefault()
+  })
+  projectBarWindow.once('ready-to-show', () => projectBarWindow.showInactive())
+  projectBarWindow.on('closed', () => { projectBarWindow = undefined })
+  loadRenderer(projectBarWindow, '#/mini-bar')
+  return projectBarWindow
+}
+
+ipcMain.handle('app:toggle-project-bar', (event) => {
+  if (!isTrustedSender(event)) throw new Error('Güvenilmeyen renderer isteği reddedildi.')
+  if (projectBarWindow && !projectBarWindow.isDestroyed() && projectBarWindow.isVisible()) projectBarWindow.hide()
+  else createProjectBar()
+  return { visible: Boolean(projectBarWindow?.isVisible()) }
+})
+
+ipcMain.handle('app:set-project-bar-expanded', (event, expanded) => {
+  if (!isTrustedSender(event)) throw new Error('Güvenilmeyen renderer isteği reddedildi.')
+  if (!projectBarWindow || projectBarWindow.isDestroyed()) return { accepted: false }
+  projectBarWindow.setSize(360, expanded ? 560 : 112, true)
+  return { accepted: true }
+})
+
+ipcMain.handle('app:show-main', (event, projectId) => {
+  if (!isTrustedSender(event)) throw new Error('Güvenilmeyen renderer isteği reddedildi.')
+  if (!mainWindow || mainWindow.isDestroyed()) createWindow()
+  mainWindow.show()
+  mainWindow.focus()
+  const safeId = typeof projectId === 'string' && /^[a-zA-Z0-9-]+$/.test(projectId) ? projectId : ''
+  mainWindow.webContents.send('app:navigate', safeId ? `/projeler?project=${safeId}` : '/projeler')
+  return { accepted: true }
+})
+
 app.whenReady().then(async () => {
   installSecurityHeaders()
   await startBackend()
   await waitForBackend()
   createWindow()
+  createProjectBar()
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })

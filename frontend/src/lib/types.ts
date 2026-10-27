@@ -33,8 +33,21 @@ export interface Project {
   contract_amount_kurus: number | null
   budget_kurus: number | null
   project_state: string
+  stage: 'planning' | 'design' | 'approval' | 'production' | 'delivery' | 'installation' | 'completed'
+  progress_percent: number
+  accent_color: string
+  address: string | null
+  next_step: string | null
+  note: string | null
   status: RecordStatus
 }
+
+export interface ProjectNote { id: string; project_id: string; content: string; pinned: boolean; created_at: string }
+export interface ProjectTask { id: string; project_id: string; title: string; due_date: string | null; task_state: 'todo' | 'waiting' | 'done'; waiting_on: string | null; note: string | null; created_at: string }
+export interface ProjectColor { id: string; project_id: string; label: string; color_code: string; material: string | null; note: string | null; created_at: string }
+export interface ProjectMeasurement { id: string; project_id: string; space_name: string; label: string; value: string; unit: string; measured_on: string; note: string | null; created_at: string }
+export interface ProjectVisit { id: string; project_id: string; visit_date: string; purpose: string; visit_state: 'planned' | 'completed' | 'cancelled'; note: string | null; created_at: string }
+export interface ProjectHub { project: Project; notes: ProjectNote[]; tasks: ProjectTask[]; colors: ProjectColor[]; measurements: ProjectMeasurement[]; visits: ProjectVisit[] }
 
 export interface Purchase {
   id: string

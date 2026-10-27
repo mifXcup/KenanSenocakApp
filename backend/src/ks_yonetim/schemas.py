@@ -80,6 +80,11 @@ class ProjectCreate(BaseModel):
     customer_name: str = Field(min_length=2, max_length=180)
     contract_amount_kurus: int | None = Field(default=None, ge=0)
     budget_kurus: int | None = Field(default=None, ge=0)
+    stage: Literal["planning", "design", "approval", "production", "delivery", "installation", "completed"] = "planning"
+    progress_percent: int = Field(default=0, ge=0, le=100)
+    accent_color: str = Field(default="#9A5A3A", min_length=4, max_length=16)
+    address: str | None = Field(default=None, max_length=2000)
+    next_step: str | None = Field(default=None, max_length=280)
     note: str | None = Field(default=None, max_length=2000)
 
 
@@ -89,6 +94,11 @@ class ProjectUpdate(BaseModel):
     contract_amount_kurus: int | None = Field(default=None, ge=0)
     budget_kurus: int | None = Field(default=None, ge=0)
     project_state: Literal["active", "completed", "cancelled"] | None = None
+    stage: Literal["planning", "design", "approval", "production", "delivery", "installation", "completed"] | None = None
+    progress_percent: int | None = Field(default=None, ge=0, le=100)
+    accent_color: str | None = Field(default=None, min_length=4, max_length=16)
+    address: str | None = Field(default=None, max_length=2000)
+    next_step: str | None = Field(default=None, max_length=280)
     note: str | None = Field(default=None, max_length=2000)
 
     @model_validator(mode="after")
@@ -109,7 +119,113 @@ class ProjectRead(OrmModel):
     contract_amount_kurus: int | None
     budget_kurus: int | None
     project_state: str
+    stage: str
+    progress_percent: int
+    accent_color: str
+    address: str | None
+    next_step: str | None
+    note: str | None
     status: RecordStatus
+
+
+class ProjectNoteCreate(BaseModel):
+    content: str = Field(min_length=1, max_length=4000)
+    pinned: bool = False
+
+
+class ProjectNoteRead(OrmModel):
+    id: str
+    project_id: str
+    content: str
+    pinned: bool
+    created_at: datetime
+
+
+class ProjectTaskCreate(BaseModel):
+    title: str = Field(min_length=2, max_length=280)
+    due_date: date | None = None
+    task_state: Literal["todo", "waiting", "done"] = "todo"
+    waiting_on: str | None = Field(default=None, max_length=180)
+    note: str | None = Field(default=None, max_length=2000)
+
+
+class ProjectTaskUpdate(BaseModel):
+    task_state: Literal["todo", "waiting", "done"]
+
+
+class ProjectTaskRead(OrmModel):
+    id: str
+    project_id: str
+    title: str
+    due_date: date | None
+    task_state: str
+    waiting_on: str | None
+    note: str | None
+    created_at: datetime
+
+
+class ProjectColorCreate(BaseModel):
+    label: str = Field(min_length=2, max_length=180)
+    color_code: str = Field(min_length=2, max_length=64)
+    material: str | None = Field(default=None, max_length=180)
+    note: str | None = Field(default=None, max_length=2000)
+
+
+class ProjectColorRead(OrmModel):
+    id: str
+    project_id: str
+    label: str
+    color_code: str
+    material: str | None
+    note: str | None
+    created_at: datetime
+
+
+class ProjectMeasurementCreate(BaseModel):
+    space_name: str = Field(min_length=2, max_length=180)
+    label: str = Field(min_length=2, max_length=180)
+    value: str = Field(min_length=1, max_length=80)
+    unit: str = Field(default="cm", min_length=1, max_length=24)
+    measured_on: date
+    note: str | None = Field(default=None, max_length=2000)
+
+
+class ProjectMeasurementRead(OrmModel):
+    id: str
+    project_id: str
+    space_name: str
+    label: str
+    value: str
+    unit: str
+    measured_on: date
+    note: str | None
+    created_at: datetime
+
+
+class ProjectVisitCreate(BaseModel):
+    visit_date: date
+    purpose: str = Field(min_length=2, max_length=280)
+    visit_state: Literal["planned", "completed", "cancelled"] = "planned"
+    note: str | None = Field(default=None, max_length=2000)
+
+
+class ProjectVisitRead(OrmModel):
+    id: str
+    project_id: str
+    visit_date: date
+    purpose: str
+    visit_state: str
+    note: str | None
+    created_at: datetime
+
+
+class ProjectHubRead(BaseModel):
+    project: ProjectRead
+    notes: list[ProjectNoteRead]
+    tasks: list[ProjectTaskRead]
+    colors: list[ProjectColorRead]
+    measurements: list[ProjectMeasurementRead]
+    visits: list[ProjectVisitRead]
 
 
 class PurchaseCreate(BaseModel):
