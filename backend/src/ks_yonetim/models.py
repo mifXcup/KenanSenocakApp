@@ -10,6 +10,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     Enum,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -426,3 +427,41 @@ class EmployeeFinancialMovement(TimestampMixin, Base):
     status: Mapped[RecordStatus] = mapped_column(
         Enum(RecordStatus), default=RecordStatus.ACTIVE, index=True
     )
+
+
+class MlRun(Base):
+    __tablename__ = "ml_runs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    model_name: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    model_version: Mapped[str] = mapped_column(String(24), nullable=False)
+    trained_from: Mapped[date | None] = mapped_column(Date)
+    trained_to: Mapped[date | None] = mapped_column(Date)
+    sample_count: Mapped[int] = mapped_column(Integer, default=0)
+    parameters: Mapped[dict | None] = mapped_column(JSON)
+    metrics: Mapped[dict | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, index=True
+    )
+
+
+class MlPrediction(Base):
+    __tablename__ = "ml_predictions"
+    __table_args__ = (Index("ix_ml_prediction_entity", "prediction_type", "entity_id"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    ml_run_id: Mapped[str] = mapped_column(
+        ForeignKey("ml_runs.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    prediction_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    entity_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    entity_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    prediction_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    target_date: Mapped[date | None] = mapped_column(Date, index=True)
+    predicted_value: Mapped[float | None] = mapped_column(Float)
+    confidence: Mapped[float | None] = mapped_column(Float)
+    explanation: Mapped[dict | None] = mapped_column(JSON)
+    actual_value: Mapped[float | None] = mapped_column(Float)
+    evaluated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    user_feedback: Mapped[str | None] = mapped_column(String(24))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

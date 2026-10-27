@@ -46,6 +46,7 @@ def _columns(inspector: Inspector, table: str) -> set[str]:
 # create_all ile açılmış (alembic_version tablosu olmayan) veritabanlarının hangi revizyona denk
 # geldiği tabloya/sütuna bakarak bulunur. En yeni revizyon en üstte durmalıdır.
 BASELINE_MARKERS: list[tuple[str, Callable[[set[str], Inspector], bool]]] = [
+    ("a9c7d8e0f1b2", lambda tables, _i: "ml_runs" in tables),
     ("f8b6c7d9e0a1", lambda tables, _i: "employee_financial_movements" in tables),
     ("e7a5b6c8d9f0", lambda tables, _i: "payroll_periods" in tables),
     ("d6f4a5b7c8e9", lambda tables, _i: "app_settings" in tables),
