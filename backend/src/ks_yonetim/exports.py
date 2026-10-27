@@ -55,7 +55,7 @@ def _plain(value: Any) -> Any:
 def table_xlsx(table: ReportTable) -> bytes:
     workbook = Workbook()
     sheet = workbook.active
-    sheet.title = re.sub(r'[\[\]:*?/\]', '-', table.title)[:31]
+    sheet.title = re.sub(r"[\[\]:*?/\\]", "-", table.title)[:31]
     sheet.append([c.label for c in table.columns])
     for cell in sheet[1]:
         cell.font = Font(bold=True, color="FFFFFF")
