@@ -133,14 +133,41 @@ veritabanını bu yedekten geri yükler.
 - `project_budget_revisions`: her tutar değişiminin değişmez kaydı (`previous_amount_kurus`, `amount_kurus`, `reason`);
   (`budget_line_id`, `revision_no`) benzersiz. Satır oluşturulurken 1. revizyon yazılır.
 - `project_change_orders`: kapsam/bedel değişikliği (`amount_kurus` ≠ 0, negatif olabilir; `change_state`).
-- `purchases.lifecycle_state` (varsayılan `received`) ve `purchases.received_kurus`: borç ve maliyet `received_kurus`
-  üzerinden hesaplanır. Migration mevcut satırlarda `received_kurus = total_kurus`, iptal edilmişlerde `cancelled` / `0` yazar.
+- `purchases.lifecycle_state` (varsayılan `received`) ve `purchases.received_kurus`: `received_kurus`, aktif
+  `purchase_receipts` toplamının önbelleğidir (WP-B1.1). Migration c1a7e9d2b3f4 mevcut satırlarda `received_kurus = total_kurus`,
+  iptal edilmişlerde `cancelled` / `0` yazar.
 - `project_expenses.category`: `subcontract` ve `rework` eklendi (sütun genişliği değişmez, ek migration gerekmez).
 
 ### Alembic revizyonu
 
-9. `c1a7e9d2b3f4` customer ledger and project finance (head; `fb1db398215f` merge revizyonunu izler)
+9. `c1a7e9d2b3f4` customer ledger and project finance (`fb1db398215f` merge revizyonunu izler)
+10. `d2b8f6a1c4e7` allocations, receipts, forecasts (head; WP-B1.1)
 
 Not: `projects.customer_id` SQLite'ta sütun içi `REFERENCES customers (id)` olarak eklenir (tablo yeniden kurulmaz,
 mevcut veri kopyalanmaz). SQLAlchemy'nin SQLite yansıtması sütun içi `ON DELETE` ifadesini okuyamadığından bu FK'de
 `ondelete` belirtilmez (varsayılan NO ACTION; FK pragma açıkken referanslı müşteri silinemez).
+
+
+## P0 / WP-B1.1 tabloları
+
+- `customer_payment_allocations`: tahsilatın alacak planına dağıtımı (çoktan çoğa). `customer_id`, `collection_id`
+  (`customer_financial_movements`), `receivable_schedule_id`, `amount_kurus` > 0, `allocation_date`, `idempotency_key`
+  benzersiz, `status` (`active` / `cancelled`), `cancelled_at`, `cancel_reason`. Silinmez; tahsilat tersleme ve manuel iptal
+  durumu değiştirir ve audit'e yazar. Plan ödenen tutarı = plana ait aktif dağıtımların toplamı.
+- `purchase_receipts`: satın alma teslim olayı. `purchase_id`, `receipt_date`, `quantity` (boş olabilir), `amount_kurus`,
+  `note`, `idempotency_key` benzersiz, `status` (`active` / `cancelled`), `cancelled_at`, `cancel_reason`. Silinmez.
+  `purchases.received_kurus` aktif fişlerin toplamıdır (aynı transaction'da senkronlanır) ve `lifecycle_state` bundan
+  türetilir. Migration, teslim alınmış her mevcut satın almayı satın alma tarihinde tek başlangıç fişine çevirir
+  (`idempotency_key = legacy-receipt:{purchase_id}`) ve mevcut satın alma hareketini bu fişe bağlar.
+- `material_movements.purchase_receipt_id`: teslim anında oluşan satın alma hareketinin fişi (boş olabilir).
+- `project_cost_forecasts`: kategori bazlı manuel kalan maliyet tahmini revizyonları (ekleme-yalnız). `project_id`,
+  `category`, `revision_no` (proje+kategori+revizyon benzersiz), `remaining_estimate_kurus` (NULL = otomatiğe dönüş),
+  `as_of_date`, `reason` zorunlu, `status` (`active` güncel, `archived` eski revizyon).
+- Mevcut `receivable_schedule_id` taşıyan tahsilatlar migration'da dağıtım kaydına çevrilir (`legacy-allocation:{id}`);
+  terslenmiş olanlar `cancelled` durumunda gelir. `customer_financial_movements.receivable_schedule_id` kolonu korunur
+  (bağlantı kolaylığı); plan ödemesinin kaynağı dağıtım tablosudur.
+
+### Alembic revizyonu
+
+10. `d2b8f6a1c4e7` allocations, receipts, forecasts (head). `material_movements.purchase_receipt_id` sütun içi
+`REFERENCES purchase_receipts (id)` olarak eklenir (tablo yeniden kurulmaz); B1'deki `ON DELETE` notu burada da geçerlidir.

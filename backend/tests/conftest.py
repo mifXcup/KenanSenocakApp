@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+from datetime import date
 from pathlib import Path
 
 TEST_DIR = Path(tempfile.mkdtemp(prefix="ks-yonetim-test-"))
@@ -12,6 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import inspect
 
+from ks_yonetim import clock
 from ks_yonetim.database import Base, engine
 from ks_yonetim.main import app
 
@@ -27,6 +29,16 @@ def clean_database():
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     yield
+
+
+FIXED_TODAY = date(2026, 3, 10)
+
+
+@pytest.fixture(autouse=True)
+def fixed_business_today(monkeypatch):
+    """Sunucu iş tarihi sabitlenir; hiçbir test sistem saatine bağlı kalmaz."""
+    monkeypatch.setattr(clock, "business_today", lambda: FIXED_TODAY)
+    return FIXED_TODAY
 
 
 @pytest.fixture

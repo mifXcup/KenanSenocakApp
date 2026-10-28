@@ -22,6 +22,7 @@ from .models import (
     Project,
     ProjectExpense,
     Purchase,
+    PurchaseReceipt,
     RecordStatus,
     Site,
     WorkLog,
@@ -96,15 +97,20 @@ def _labor(session: Session, column, value: str, date_from, date_to) -> int:
 def project_cost_summary(
     session: Session, project: Project, date_from: date | None = None, date_to: date | None = None
 ) -> ProjectCostSummaryOut:
-    purchase_query = select(func.sum(Purchase.received_kurus)).where(
-        Purchase.project_id == project.id,
-        Purchase.status == RecordStatus.ACTIVE,
-        ~Purchase.idempotency_key.like(f"{OPENING_PREFIX}%"),
+    purchase_query = (
+        select(func.sum(PurchaseReceipt.amount_kurus))
+        .join(Purchase, Purchase.id == PurchaseReceipt.purchase_id)
+        .where(
+            Purchase.project_id == project.id,
+            Purchase.status == RecordStatus.ACTIVE,
+            PurchaseReceipt.status == RecordStatus.ACTIVE,
+            ~Purchase.idempotency_key.like(f"{OPENING_PREFIX}%"),
+        )
     )
     if date_from:
-        purchase_query = purchase_query.where(Purchase.purchase_date >= date_from)
+        purchase_query = purchase_query.where(PurchaseReceipt.receipt_date >= date_from)
     if date_to:
-        purchase_query = purchase_query.where(Purchase.purchase_date <= date_to)
+        purchase_query = purchase_query.where(PurchaseReceipt.receipt_date <= date_to)
     purchase = _scalar(session, purchase_query)
     labor = _labor(session, WorkLog.project_id, project.id, date_from, date_to)
     expenses = _expenses(session, ProjectExpense.project_id, project.id, date_from, date_to)

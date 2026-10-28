@@ -275,3 +275,117 @@ def test_v030_database_upgrades_without_data_loss(tmp_path):
         diff = compare_metadata(MigrationContext.configure(connection), Base.metadata)
     assert diff == [], diff
     engine.dispose()
+
+
+def test_19b18b8_schema_upgrades_with_receipt_and_allocation_backfill(tmp_path):
+    from alembic import command
+
+    db_path = tmp_path / "b1.db"
+    engine = build_engine(f"sqlite:///{db_path.as_posix()}")
+    config = migrate.alembic_config()
+    migrate._run(config, engine, lambda cfg: command.upgrade(cfg, "c1a7e9d2b3f4"))
+    stamp = "2026-10-27 09:00:00.000000"
+    audit_cols = f"'{stamp}', '{stamp}'"
+    statements = [
+        f"INSERT INTO suppliers (id, name, status, created_at, updated_at) VALUES ('s1', 'Firma', 'ACTIVE', {audit_cols})",
+        (
+            "INSERT INTO materials (id, name, default_unit, tracking_mode, status, created_at, updated_at) "
+            f"VALUES ('m1', 'Malzeme', 'adet', 'EXACT', 'ACTIVE', {audit_cols})"
+        ),
+        (
+            "INSERT INTO customers (id, name, normalized_name, status, created_at, updated_at) "
+            f"VALUES ('c1', 'Müşteri', 'müşteri', 'ACTIVE', {audit_cols})"
+        ),
+        (
+            "INSERT INTO projects (id, name, customer_name, customer_id, project_state, status, created_at, "
+            f"updated_at) VALUES ('p1', 'Proje', 'Müşteri', 'c1', 'active', 'ACTIVE', {audit_cols})"
+        ),
+        # Teslim alınmış, planlı ve iptal edilmiş satın almalar (c1a7e9d2b3f4 şemasında).
+        (
+            "INSERT INTO purchases (id, supplier_id, material_id, project_id, purchase_date, quantity, "
+            "total_kurus, idempotency_key, status, lifecycle_state, received_kurus, created_at, updated_at) "
+            f"VALUES ('pu1', 's1', 'm1', 'p1', '2026-10-01', 12.000, 120000, 'b1-purchase-0001', 'ACTIVE', 'received', 120000, {audit_cols})"
+        ),
+        (
+            "INSERT INTO purchases (id, supplier_id, material_id, project_id, purchase_date, total_kurus, "
+            "idempotency_key, status, lifecycle_state, received_kurus, created_at, updated_at) "
+            f"VALUES ('pu2', 's1', 'm1', 'p1', '2026-10-02', 50000, 'b1-purchase-0002', 'ACTIVE', 'planned', 0, {audit_cols})"
+        ),
+        (
+            "INSERT INTO purchases (id, supplier_id, material_id, project_id, purchase_date, total_kurus, "
+            "idempotency_key, status, lifecycle_state, received_kurus, created_at, updated_at) "
+            f"VALUES ('pu3', 's1', 'm1', 'p1', '2026-10-03', 70000, 'b1-purchase-0003', 'CANCELLED', 'cancelled', 0, {audit_cols})"
+        ),
+        (
+            "INSERT INTO material_movements (id, material_id, project_id, purchase_id, movement_date, "
+            "movement_type, quantity, unit, amount_kurus, confidence, status, created_at, updated_at) "
+            f"VALUES ('mm1', 'm1', 'p1', 'pu1', '2026-10-01', 'PURCHASE', 12.000, 'adet', 120000, 'EXACT', 'ACTIVE', {audit_cols})"
+        ),
+        (
+            "INSERT INTO receivable_schedules (id, customer_id, project_id, title, amount_kurus, status, "
+            f"created_at, updated_at) VALUES ('rs1', 'c1', 'p1', 'Plan', 50000, 'ACTIVE', {audit_cols})"
+        ),
+        # Plana bağlı tahsilat, terslenmiş tahsilat ve onun ters satırı.
+        (
+            "INSERT INTO customer_financial_movements (id, customer_id, project_id, receivable_schedule_id, "
+            "movement_date, movement_type, direction, amount_kurus, idempotency_key, source, status, "
+            f"created_at, updated_at) VALUES ('cm1', 'c1', 'p1', 'rs1', '2026-10-05', 'collection', 'receivable_decrease', 30000, 'b1-collect-0001', 'manual', 'ACTIVE', {audit_cols})"
+        ),
+        (
+            "INSERT INTO customer_financial_movements (id, customer_id, project_id, receivable_schedule_id, "
+            "movement_date, movement_type, direction, amount_kurus, idempotency_key, source, status, "
+            f"created_at, updated_at) VALUES ('cm2', 'c1', 'p1', 'rs1', '2026-10-06', 'collection', 'receivable_decrease', 10000, 'b1-collect-0002', 'manual', 'ACTIVE', {audit_cols})"
+        ),
+        (
+            "INSERT INTO customer_financial_movements (id, customer_id, project_id, receivable_schedule_id, "
+            "movement_date, movement_type, direction, amount_kurus, idempotency_key, reversed_movement_id, "
+            "source, status, created_at, updated_at) VALUES ('cm3', 'c1', 'p1', 'rs1', '2026-10-06', "
+            f"'reversal', 'receivable_increase', 10000, 'reverse:cm2-0001', 'cm2', 'system', 'ACTIVE', {audit_cols})"
+        ),
+    ]
+    with engine.begin() as connection:
+        for sql in statements:
+            connection.exec_driver_sql(sql)
+
+    result = migrate.upgrade_database(engine)
+    assert result["previous"] == "c1a7e9d2b3f4"
+    assert result["current"] == migrate.head_revision()
+    backup = next(item for item in backup_manager.list() if item.backup_id == result["backup_id"])
+    backup_manager.verify(backup.backup_id)
+
+    # Teslim alınmış satın alma tek başlangıç fişine dönüşür; planlı ve iptal edilmişler fiş almaz.
+    receipts = query(
+        db_path,
+        "SELECT purchase_id, receipt_date, amount_kurus, quantity, status FROM purchase_receipts",
+    )
+    assert receipts == [("pu1", "2026-10-01", 120000, 12, "ACTIVE")]
+    assert query(
+        db_path, "SELECT p.id, p.received_kurus FROM purchases p ORDER BY p.id"
+    ) == [("pu1", 120000), ("pu2", 0), ("pu3", 0)]
+    linked = query(
+        db_path,
+        "SELECT m.id FROM material_movements m JOIN purchase_receipts r ON r.id = m.purchase_receipt_id",
+    )
+    assert linked == [("mm1",)]
+
+    # Plana bağlı tahsilatlar dağıtıma dönüşür; terslenmiş olan iptal durumunda gelir.
+    allocations = query(
+        db_path,
+        "SELECT collection_id, receivable_schedule_id, amount_kurus, status, customer_id "
+        "FROM customer_payment_allocations ORDER BY collection_id",
+    )
+    assert allocations == [
+        ("cm1", "rs1", 30000, "ACTIVE", "c1"),
+        ("cm2", "rs1", 10000, "CANCELLED", "c1"),
+    ]
+    assert query(db_path, "SELECT COUNT(*) FROM project_cost_forecasts") == [(0,)]
+    assert query(db_path, "PRAGMA integrity_check") == [("ok",)]
+    assert query(db_path, "PRAGMA foreign_key_check") == []
+
+    again = migrate.upgrade_database(engine)
+    assert again["backup_id"] is None
+    assert query(db_path, "SELECT COUNT(*) FROM purchase_receipts") == [(1,)]
+    with engine.connect() as connection:
+        diff = compare_metadata(MigrationContext.configure(connection), Base.metadata)
+    assert diff == [], diff
+    engine.dispose()

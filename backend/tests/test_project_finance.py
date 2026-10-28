@@ -259,7 +259,9 @@ def test_profitability_and_drilldown_are_consistent(client):
     for name, row in by_category.items():
         assert sum(s["amount_kurus"] for s in cats[name]["actual_sources"]) == row["actual_kurus"]
         assert sum(s["amount_kurus"] for s in cats[name]["commitment_sources"]) == row["commitment_kurus"]
-    assert [s["source_id"] for s in cats["material"]["actual_sources"]] == [received["id"]]
+    material_sources = cats["material"]["actual_sources"]
+    assert [s["purchase_id"] for s in material_sources] == [received["id"]]
+    assert material_sources[0]["source_type"] == "purchase_receipt"
     assert [s["source_id"] for s in cats["material"]["commitment_sources"]] == [planned["id"]]
     assert [s["source_id"] for s in cats["labor"]["actual_sources"]] == [labor_log["id"]]
     assert [s["source_id"] for s in cats["shipping"]["actual_sources"]] == [expenses["shipping"]["id"]]
@@ -316,7 +318,7 @@ def test_supplier_statement_aging_and_payment_reversal(client):
     assert client.post(f"{API}/payments/yok-000/reverse").status_code == 404
 
     statement = client.get(f"{API}/suppliers/{supplier['id']}/statement").json()
-    assert [r["row_type"] for r in statement["rows"]] == ["purchase", "payment", "payment_reversal"]
+    assert [r["row_type"] for r in statement["rows"]] == ["purchase_receipt", "payment", "payment_reversal"]
     assert statement["closing_balance_kurus"] == 100_000
     assert statement["closing_balance_kurus"] == supplier_balance(client, supplier)
     assert statement["total_increase_kurus"] - statement["total_decrease_kurus"] == 100_000

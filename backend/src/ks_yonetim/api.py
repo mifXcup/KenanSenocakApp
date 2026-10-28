@@ -540,23 +540,6 @@ def purchase_paid(session: Session, purchase_id: str) -> int:
     )
 
 
-def add_purchase_movement(session: Session, purchase: Purchase, material: Material) -> None:
-    """Teslim alınan satın alma için otomatik malzeme hareketi (planlı/siparişte yazılmaz)."""
-    session.add(
-        MaterialMovement(
-            material_id=material.id,
-            project_id=purchase.project_id,
-            purchase_id=purchase.id,
-            movement_date=purchase.purchase_date,
-            movement_type=MovementType.PURCHASE,
-            quantity=purchase.quantity,
-            unit=purchase.unit or material.default_unit,
-            amount_kurus=purchase.total_kurus,
-            confidence=material.tracking_mode,
-        )
-    )
-
-
 def to_purchase_detail(purchase: Purchase, paid_kurus: int) -> PurchaseDetail:
     return PurchaseDetail(
         **PurchaseRead.model_validate(purchase).model_dump(),
@@ -581,17 +564,26 @@ def create_purchase(
         paid = purchase_paid(session, existing.id)
         return to_purchase_detail(existing, paid)
     supplier = require_active(session, Supplier, payload.supplier_id, "Firma")
-    material = require_active(session, Material, payload.material_id, "Malzeme")
+    require_active(session, Material, payload.material_id, "Malzeme")
     if payload.project_id:
         require_active(session, Project, payload.project_id, "Proje")
     purchase_data = payload.model_dump(exclude={"paid_kurus", "total_kurus"})
     total = payload.resolved_total_kurus
     received = payload.lifecycle_state == "received"
-    purchase = Purchase(**purchase_data, total_kurus=total, received_kurus=total if received else 0)
+    purchase = Purchase(**purchase_data, total_kurus=total, received_kurus=0)
     session.add(purchase)
     session.flush()
     if received:
-        add_purchase_movement(session, purchase, material)
+        from .receipts import add_receipt
+
+        add_receipt(
+            session,
+            purchase,
+            receipt_date=payload.purchase_date,
+            amount_kurus=total,
+            quantity=payload.quantity,
+            idempotency_key=f"{payload.idempotency_key}:receipt",
+        )
     if payload.paid_kurus:
         session.add(
             Payment(
@@ -760,6 +752,9 @@ def cancel_purchase(purchase_id: str, session: Session = Depends(get_session)) -
             "Ödemesi bulunan satın alma önce ödeme ters kaydı yapılmadan iptal edilemez.",
             409,
         )
+    from .receipts import cancel_all_receipts
+
+    cancel_all_receipts(session, purchase, "Satın alma iptali")
     purchase.status = RecordStatus.CANCELLED
     purchase.lifecycle_state = "cancelled"
     purchase.received_kurus = 0

@@ -115,7 +115,7 @@ def export_pdf(kind: str, session: Session = Depends(get_session)) -> Spreadshee
         for project in session.scalars(select(Project).order_by(Project.name)):
             purchase = int(
                 session.scalar(
-                    select(func.sum(Purchase.total_kurus)).where(
+                    select(func.sum(Purchase.received_kurus)).where(
                         Purchase.project_id == project.id, Purchase.status == RecordStatus.ACTIVE
                     )
                 )

@@ -10,7 +10,7 @@ Revize sözleşme bedeli = sözleşme + yalnız onaylı ek işler.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Query
@@ -18,31 +18,26 @@ from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from .api import (
-    ApiError,
-    add_audit,
-    add_purchase_movement,
-    cancel_purchase,
-    require_active,
-    require_sidecar_token,
-)
+from . import clock
+from .api import ApiError, add_audit, cancel_purchase, require_active, require_sidecar_token
 from .database import get_session
 from .models import (
     CustomerFinancialMovement,
     ExpenseCategory,
     Material,
-    MaterialMovement,
-    MovementType,
     Project,
     ProjectBudgetLine,
     ProjectBudgetRevision,
     ProjectChangeOrder,
+    ProjectCostForecast,
     ProjectExpense,
     Purchase,
+    PurchaseReceipt,
     RecordStatus,
     WorkLog,
 )
 from .project_costs import OPENING_PREFIX
+from .receipts import add_receipt
 from .schemas import OrmModel
 
 router = APIRouter(prefix="/api/v1", dependencies=[Depends(require_sidecar_token)])
@@ -497,6 +492,9 @@ for _target, _path in (
 class PurchaseLifecycleRequest(BaseModel):
     state: Literal["ordered", "partially_received", "received", "cancelled"]
     received_kurus: int | None = Field(default=None, gt=0)
+    # Teslim fişi tarihi; verilmezse sunucunun iş tarihi (istemci her zaman açıkça göndermelidir).
+    receipt_date: date | None = None
+    idempotency_key: str | None = Field(default=None, min_length=8, max_length=100)
     note: str | None = Field(default=None, max_length=255)
 
     @model_validator(mode="after")
@@ -520,6 +518,7 @@ class PurchaseLifecycleRead(OrmModel):
 def set_purchase_lifecycle(
     purchase_id: str, payload: PurchaseLifecycleRequest, session: Session = Depends(get_session)
 ):
+    """Durum geçişi. Teslim geçişleri (`partially_received`, `received`) teslim fişi yazar."""
     purchase = require_active(session, Purchase, purchase_id, "Satın alma")
     current = purchase.lifecycle_state
     if payload.state not in PURCHASE_TRANSITIONS[current]:
@@ -530,42 +529,57 @@ def set_purchase_lifecycle(
             {"from": current, "to": payload.state},
         )
     if payload.state == "cancelled":
-        cancelled = cancel_purchase(purchase_id, session)
-        return cancelled
-    if payload.state == "partially_received":
-        assert payload.received_kurus is not None
-        if payload.received_kurus >= purchase.total_kurus:
-            raise ApiError(
-                "invalid_received_amount",
-                "Kısmi teslim tutarı toplamdan küçük olmalıdır; tam teslim için 'received' kullanın.",
-                422,
-                {"total_kurus": purchase.total_kurus},
-            )
-        if payload.received_kurus <= purchase.received_kurus:
-            raise ApiError(
-                "invalid_received_amount",
-                "Teslim alınan tutar önceki teslimden büyük olmalıdır.",
-                422,
-                {"received_kurus": purchase.received_kurus},
-            )
-        purchase.received_kurus = payload.received_kurus
-    elif payload.state == "received":
-        purchase.received_kurus = purchase.total_kurus
-        has_movement = session.scalar(
-            select(MaterialMovement.id).where(
-                MaterialMovement.purchase_id == purchase.id,
-                MaterialMovement.movement_type == MovementType.PURCHASE,
-                MaterialMovement.status == RecordStatus.ACTIVE,
-            )
+        return cancel_purchase(purchase_id, session)
+    if payload.state == "ordered":
+        purchase.lifecycle_state = "ordered"
+    else:
+        received = purchase.received_kurus
+        if payload.state == "partially_received":
+            assert payload.received_kurus is not None
+            if payload.received_kurus >= purchase.total_kurus:
+                raise ApiError(
+                    "invalid_received_amount",
+                    "Kısmi teslim tutarı toplamdan küçük olmalıdır; tam teslim için 'received' kullanın.",
+                    422,
+                    {"total_kurus": purchase.total_kurus},
+                )
+            if payload.received_kurus <= received:
+                raise ApiError(
+                    "invalid_received_amount",
+                    "Teslim alınan tutar önceki teslimden büyük olmalıdır.",
+                    422,
+                    {"received_kurus": received},
+                )
+            delta, quantity = payload.received_kurus - received, None
+        else:
+            delta, quantity = purchase.total_kurus - received, None
+            if purchase.quantity is not None:
+                taken = session.scalar(
+                    select(func.coalesce(func.sum(PurchaseReceipt.quantity), 0)).where(
+                        PurchaseReceipt.purchase_id == purchase.id,
+                        PurchaseReceipt.status == RecordStatus.ACTIVE,
+                    )
+                )
+                rest = purchase.quantity - (taken or 0)
+                quantity = rest if rest > 0 else None
+        count = session.scalar(
+            select(func.count(PurchaseReceipt.id)).where(PurchaseReceipt.purchase_id == purchase.id)
         )
-        if not has_movement:
-            add_purchase_movement(session, purchase, session.get(Material, purchase.material_id))
-    else:  # ordered
-        purchase.received_kurus = 0
-    purchase.lifecycle_state = payload.state
+        add_receipt(
+            session,
+            purchase,
+            receipt_date=payload.receipt_date or clock.business_today(),
+            amount_kurus=delta,
+            quantity=quantity,
+            note=payload.note,
+            idempotency_key=payload.idempotency_key or f"lifecycle:{purchase.id}:{count}",
+        )
     add_audit(
-        session, "purchase", purchase.id, "lifecycle",
-        {"from": current, "to": payload.state, "received_kurus": purchase.received_kurus,
+        session,
+        "purchase",
+        purchase.id,
+        "lifecycle",
+        {"from": current, "to": purchase.lifecycle_state, "received_kurus": purchase.received_kurus,
          "note": payload.note},
     )
     session.commit()
@@ -573,7 +587,7 @@ def set_purchase_lifecycle(
     return purchase
 
 
-# --- Maliyet kaynakları, kârlılık ve detay ----------------------------------------------------------
+# --- Maliyet kaynakları -----------------------------------------------------------------------------
 
 
 def collect_cost_sources(session: Session, project: Project) -> dict[str, dict[str, list[dict]]]:
@@ -581,34 +595,50 @@ def collect_cost_sources(session: Session, project: Project) -> dict[str, dict[s
     sources: dict[str, dict[str, list[dict]]] = {
         category: {"actual": [], "commitment": []} for category in BUDGET_CATEGORIES
     }
-    purchases = session.execute(
+    not_opening = ~Purchase.idempotency_key.like(f"{OPENING_PREFIX}%")
+    receipts = session.execute(
+        select(PurchaseReceipt, Purchase, Material.name)
+        .join(Purchase, Purchase.id == PurchaseReceipt.purchase_id)
+        .join(Material, Material.id == Purchase.material_id)
+        .where(
+            Purchase.project_id == project.id,
+            Purchase.status == RecordStatus.ACTIVE,
+            PurchaseReceipt.status == RecordStatus.ACTIVE,
+            not_opening,
+        )
+        .order_by(PurchaseReceipt.receipt_date, PurchaseReceipt.id)
+    ).all()
+    for receipt, purchase, material_name in receipts:
+        sources["material"]["actual"].append(
+            {
+                "source_type": "purchase_receipt",
+                "source_id": receipt.id,
+                "purchase_id": purchase.id,
+                "date": receipt.receipt_date,
+                "amount_kurus": receipt.amount_kurus,
+                "label": material_name,
+                "lifecycle_state": purchase.lifecycle_state,
+            }
+        )
+    committing = session.execute(
         select(Purchase, Material.name)
         .join(Material, Material.id == Purchase.material_id)
         .where(
             Purchase.project_id == project.id,
             Purchase.status == RecordStatus.ACTIVE,
-            ~Purchase.idempotency_key.like(f"{OPENING_PREFIX}%"),
+            Purchase.lifecycle_state.in_(COMMITTING_STATES),
+            not_opening,
         )
         .order_by(Purchase.purchase_date, Purchase.id)
     ).all()
-    for purchase, material_name in purchases:
-        if purchase.received_kurus > 0:
-            sources["material"]["actual"].append(
-                {
-                    "source_type": "purchase",
-                    "source_id": purchase.id,
-                    "date": purchase.purchase_date,
-                    "amount_kurus": purchase.received_kurus,
-                    "label": material_name,
-                    "lifecycle_state": purchase.lifecycle_state,
-                }
-            )
+    for purchase, material_name in committing:
         outstanding = purchase.total_kurus - purchase.received_kurus
-        if purchase.lifecycle_state in COMMITTING_STATES and outstanding > 0:
+        if outstanding > 0:
             sources["material"]["commitment"].append(
                 {
                     "source_type": "purchase",
                     "source_id": purchase.id,
+                    "purchase_id": purchase.id,
                     "date": purchase.purchase_date,
                     "amount_kurus": outstanding,
                     "label": material_name,
@@ -651,18 +681,205 @@ def _total(items: list[dict]) -> int:
     return sum(item["amount_kurus"] for item in items)
 
 
-@router.get("/projects/{project_id}/profitability")
-def project_profitability(project_id: str, session: Session = Depends(get_session)):
-    project = require_active(session, Project, project_id, "Proje")
-    sources = collect_cost_sources(session, project)
-    lines = list(
+# --- Manuel kalan maliyet tahmini -------------------------------------------------------------------
+
+
+class ForecastItem(BaseModel):
+    category: BudgetCategory
+    # None: manuel tahmini kaldır, otomatik artık hesabına dön.
+    remaining_estimate_kurus: int | None = Field(default=None, ge=0)
+    as_of_date: date
+    reason: str = Field(min_length=3, max_length=255)
+
+
+class ForecastUpdate(BaseModel):
+    items: list[ForecastItem] = Field(min_length=1, max_length=len(BUDGET_CATEGORIES))
+
+    @model_validator(mode="after")
+    def unique_categories(self) -> ForecastUpdate:
+        names = [item.category for item in self.items]
+        if len(names) != len(set(names)):
+            raise ValueError("Aynı kategori bir istekte yalnız bir kez gönderilebilir.")
+        return self
+
+
+def manual_forecasts(session: Session, project_id: str) -> dict[str, ProjectCostForecast]:
+    """Kategori başına güncel (ACTIVE) revizyon; yalnız tahmin değeri olanlar manueldir."""
+    rows = session.scalars(
+        select(ProjectCostForecast).where(
+            ProjectCostForecast.project_id == project_id,
+            ProjectCostForecast.status == RecordStatus.ACTIVE,
+        )
+    )
+    return {r.category: r for r in rows}
+
+
+def build_categories(
+    session: Session, project: Project, sources: dict, lines: list[ProjectBudgetLine]
+) -> list[dict]:
+    manual = manual_forecasts(session, project.id)
+    rows = []
+    for category in BUDGET_CATEGORIES:
+        category_lines = [line for line in lines if line.category == category]
+        actual = _total(sources[category]["actual"])
+        commitment = _total(sources[category]["commitment"])
+        budget = sum(line.amount_kurus for line in category_lines) if category_lines else None
+        auto = max(budget - actual - commitment, 0) if budget is not None else 0
+        chosen = manual.get(category)
+        is_manual = chosen is not None and chosen.remaining_estimate_kurus is not None
+        remaining = chosen.remaining_estimate_kurus if is_manual else auto
+        forecast = actual + commitment + remaining
+        rows.append(
+            {
+                "category": category,
+                "budget_kurus": budget,
+                "original_budget_kurus": (
+                    sum(line.original_amount_kurus for line in category_lines)
+                    if category_lines
+                    else None
+                ),
+                "actual_kurus": actual,
+                "commitment_kurus": commitment,
+                "auto_remaining_estimate_kurus": auto,
+                "remaining_estimate_kurus": remaining,
+                "forecast_source": "manual" if is_manual else "auto",
+                "forecast_revision_no": chosen.revision_no if is_manual else None,
+                "forecast_as_of_date": chosen.as_of_date if is_manual else None,
+                "forecast_reason": chosen.reason if is_manual else None,
+                "forecast_kurus": forecast,
+                "variance_kurus": (budget - forecast) if budget is not None else None,
+                "budget_line_ids": [line.id for line in category_lines],
+            }
+        )
+    return rows
+
+
+def _active_lines(session: Session, project_id: str) -> list[ProjectBudgetLine]:
+    return list(
         session.scalars(
             select(ProjectBudgetLine).where(
-                ProjectBudgetLine.project_id == project.id,
+                ProjectBudgetLine.project_id == project_id,
                 ProjectBudgetLine.status == RecordStatus.ACTIVE,
             )
         )
     )
+
+
+def _forecast_view(session: Session, project: Project) -> list[dict]:
+    categories = build_categories(
+        session, project, collect_cost_sources(session, project), _active_lines(session, project.id)
+    )
+    return [
+        {
+            "category": row["category"],
+            "forecast_source": row["forecast_source"],
+            "remaining_estimate_kurus": row["remaining_estimate_kurus"],
+            "auto_remaining_estimate_kurus": row["auto_remaining_estimate_kurus"],
+            "revision_no": row["forecast_revision_no"],
+            "as_of_date": row["forecast_as_of_date"],
+            "reason": row["forecast_reason"],
+        }
+        for row in categories
+    ]
+
+
+@router.get("/projects/{project_id}/cost-forecasts")
+def get_cost_forecasts(project_id: str, session: Session = Depends(get_session)):
+    project = require_active(session, Project, project_id, "Proje")
+    return {"project_id": project.id, "forecasts": _forecast_view(session, project)}
+
+
+@router.get("/projects/{project_id}/cost-forecasts/history")
+def get_cost_forecast_history(
+    project_id: str, category: BudgetCategory | None = None, session: Session = Depends(get_session)
+):
+    project = require_active(session, Project, project_id, "Proje")
+    query = select(ProjectCostForecast).where(ProjectCostForecast.project_id == project.id)
+    if category:
+        query = query.where(ProjectCostForecast.category == category)
+    rows = session.scalars(
+        query.order_by(ProjectCostForecast.category, ProjectCostForecast.revision_no)
+    )
+    return {
+        "project_id": project.id,
+        "revisions": [
+            {
+                "id": r.id,
+                "category": r.category,
+                "revision_no": r.revision_no,
+                "remaining_estimate_kurus": r.remaining_estimate_kurus,
+                "forecast_source": "manual" if r.remaining_estimate_kurus is not None else "auto",
+                "as_of_date": r.as_of_date,
+                "reason": r.reason,
+                "is_current": r.status == RecordStatus.ACTIVE,
+                "created_at": r.created_at,
+            }
+            for r in rows
+        ],
+    }
+
+
+@router.put("/projects/{project_id}/cost-forecasts")
+def put_cost_forecasts(
+    project_id: str, payload: ForecastUpdate, session: Session = Depends(get_session)
+):
+    project = require_active(session, Project, project_id, "Proje")
+    current = manual_forecasts(session, project.id)
+    for item in payload.items:
+        previous = current.get(item.category)
+        if item.remaining_estimate_kurus is None and (
+            previous is None or previous.remaining_estimate_kurus is None
+        ):
+            raise ApiError(
+                "no_manual_forecast",
+                "Kaldırılacak manuel tahmin yok.",
+                409,
+                {"category": item.category},
+            )
+        last_revision = session.scalar(
+            select(func.max(ProjectCostForecast.revision_no)).where(
+                ProjectCostForecast.project_id == project.id,
+                ProjectCostForecast.category == item.category,
+            )
+        )
+        if previous is not None:
+            previous.status = RecordStatus.ARCHIVED
+            session.flush()
+        revision = ProjectCostForecast(
+            project_id=project.id,
+            category=item.category,
+            revision_no=(last_revision or 0) + 1,
+            remaining_estimate_kurus=item.remaining_estimate_kurus,
+            as_of_date=item.as_of_date,
+            reason=item.reason,
+        )
+        session.add(revision)
+        session.flush()
+        add_audit(
+            session,
+            "project_cost_forecast",
+            revision.id,
+            "revised",
+            {
+                "project_id": project.id,
+                "category": item.category,
+                "previous_kurus": previous.remaining_estimate_kurus if previous else None,
+                "remaining_estimate_kurus": item.remaining_estimate_kurus,
+                "reason": item.reason,
+            },
+        )
+    session.commit()
+    return {"project_id": project.id, "forecasts": _forecast_view(session, project)}
+
+
+# --- Kârlılık ve maliyet detayı ---------------------------------------------------------------------
+
+
+@router.get("/projects/{project_id}/profitability")
+def project_profitability(project_id: str, session: Session = Depends(get_session)):
+    project = require_active(session, Project, project_id, "Proje")
+    sources = collect_cost_sources(session, project)
+    lines = _active_lines(session, project.id)
     approved = approved_change_total(session, project.id)
     revised = revised_contract(project, approved)
     pending = int(
@@ -687,40 +904,19 @@ def project_profitability(project_id: str, session: Session = Depends(get_sessio
         budget_source = "none"
         original_budget = revised_budget = None
 
-    categories = []
-    actual_total = commitment_total = remaining_total = 0
-    for category in BUDGET_CATEGORIES:
-        category_lines = [line for line in lines if line.category == category]
-        actual = _total(sources[category]["actual"])
-        commitment = _total(sources[category]["commitment"])
-        budget = sum(line.amount_kurus for line in category_lines) if category_lines else None
-        remaining = max(budget - actual - commitment, 0) if budget is not None else 0
-        forecast = actual + commitment + remaining
-        categories.append(
-            {
-                "category": category,
-                "budget_kurus": budget,
-                "original_budget_kurus": (
-                    sum(line.original_amount_kurus for line in category_lines)
-                    if category_lines
-                    else None
-                ),
-                "actual_kurus": actual,
-                "commitment_kurus": commitment,
-                "remaining_estimate_kurus": remaining,
-                "forecast_kurus": forecast,
-                "variance_kurus": (budget - forecast) if budget is not None else None,
-                "budget_line_ids": [line.id for line in category_lines],
-            }
-        )
-        actual_total += actual
-        commitment_total += commitment
-        remaining_total += remaining
+    categories = build_categories(session, project, sources, lines)
+    actual_total = sum(c["actual_kurus"] for c in categories)
+    commitment_total = sum(c["commitment_kurus"] for c in categories)
+    remaining_total = sum(c["remaining_estimate_kurus"] for c in categories)
+    manual_count = sum(1 for c in categories if c["forecast_source"] == "manual")
 
     unallocated_remaining = 0
     if budget_source == "project_budget":
-        # Satır bazlı bütçe yoksa proje geneli bütçeden kalan tek kalemde tahmin edilir.
-        unallocated_remaining = max(project.budget_kurus - actual_total - commitment_total, 0)
+        # Satır bazlı bütçe yoksa proje geneli bütçeden kalan tek kalemde tahmin edilir; manuel
+        # tahminler bu bütçeden harcanmış sayılır.
+        unallocated_remaining = max(
+            project.budget_kurus - actual_total - commitment_total - remaining_total, 0
+        )
     forecast_total = actual_total + commitment_total + remaining_total + unallocated_remaining
     profit = revised - forecast_total if revised is not None else None
     return {
@@ -735,6 +931,7 @@ def project_profitability(project_id: str, session: Session = Depends(get_sessio
         "actual_cost_kurus": actual_total,
         "commitment_kurus": commitment_total,
         "remaining_estimate_kurus": remaining_total + unallocated_remaining,
+        "manual_forecast_count": manual_count,
         "forecast_cost_at_completion_kurus": forecast_total,
         "budget_variance_kurus": (
             revised_budget - forecast_total if revised_budget is not None else None
@@ -757,6 +954,10 @@ def project_cost_drilldown(
 ):
     project = require_active(session, Project, project_id, "Proje")
     sources = collect_cost_sources(session, project)
+    forecasts = {
+        row["category"]: row
+        for row in build_categories(session, project, sources, _active_lines(session, project.id))
+    }
     result = []
     actual_total = commitment_total = 0
     for name in BUDGET_CATEGORIES:
@@ -772,6 +973,9 @@ def project_cost_drilldown(
                 "category": name,
                 "actual_kurus": actual,
                 "commitment_kurus": commitment,
+                "remaining_estimate_kurus": forecasts[name]["remaining_estimate_kurus"],
+                "forecast_source": forecasts[name]["forecast_source"],
+                "forecast_kurus": forecasts[name]["forecast_kurus"],
                 "actual_source_count": len(actual_items),
                 "commitment_source_count": len(commitment_items),
                 "actual_sources": actual_items[:limit],

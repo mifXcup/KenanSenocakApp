@@ -1,8 +1,7 @@
 """Tedarikçi ekstresi ve tedarikçi bazlı borç yaşlandırması.
 
-Borç, teslim alınan satın alma tutarıyla artar (`received_kurus`); aktif ödemeyle azalır. Terslenen
+Borç, teslim fişlerinin tarih ve tutarıyla artar; aktif ödemeyle azalır. Terslenen
 ödeme ekstrede hem ödeme satırı hem de terslendiği tarihte borcu geri artıran satır olarak görünür.
-Kısmi teslimde teslim tarihi ayrı tutulmadığından teslim alınan tutar satın alma tarihinde sayılır.
 """
 
 from __future__ import annotations
@@ -13,35 +12,38 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from . import clock
 from .api import ApiError, require_active, require_sidecar_token
 from .database import get_session
-from .models import Payment, Purchase, RecordStatus, Supplier
+from .models import Payment, Purchase, PurchaseReceipt, RecordStatus, Supplier
 from .reports import AGING_LABELS, OVERDUE_KEYS, debt_aging
 
 router = APIRouter(prefix="/api/v1", dependencies=[Depends(require_sidecar_token)])
-ROW_ORDER = {"purchase": 0, "payment": 1, "payment_reversal": 2}
+ROW_ORDER = {"purchase_receipt": 0, "payment": 1, "payment_reversal": 2}
 
 
 def _supplier_rows(session: Session, supplier_id: str, date_to: date | None) -> list[dict]:
     rows: list[dict] = []
-    purchases = session.scalars(
-        select(Purchase).where(
-            Purchase.supplier_id == supplier_id, Purchase.status == RecordStatus.ACTIVE
+    receipts = session.execute(
+        select(PurchaseReceipt, Purchase)
+        .join(Purchase, Purchase.id == PurchaseReceipt.purchase_id)
+        .where(
+            Purchase.supplier_id == supplier_id,
+            Purchase.status == RecordStatus.ACTIVE,
+            PurchaseReceipt.status == RecordStatus.ACTIVE,
         )
     )
-    for purchase in purchases:
-        if purchase.received_kurus <= 0:
-            continue
+    for receipt, purchase in receipts:
         rows.append(
             {
-                "row_type": "purchase",
-                "source_id": purchase.id,
-                "date": purchase.purchase_date,
-                "increase_kurus": purchase.received_kurus,
+                "row_type": "purchase_receipt",
+                "source_id": receipt.id,
+                "date": receipt.receipt_date,
+                "increase_kurus": receipt.amount_kurus,
                 "decrease_kurus": 0,
                 "purchase_id": purchase.id,
                 "lifecycle_state": purchase.lifecycle_state,
-                "note": purchase.description,
+                "note": receipt.note or purchase.description,
             }
         )
     payments = session.scalars(
@@ -120,7 +122,7 @@ def supplier_aging(
     supplier_id: str, session: Session = Depends(get_session), as_of: date | None = None
 ):
     supplier = require_active(session, Supplier, supplier_id, "Firma")
-    day = as_of or date.today()
+    day = as_of or clock.business_today()
     report = debt_aging(session, day)
     items = [item for item in report.items if item.supplier_id == supplier.id]
     totals = {key: [0, 0] for key in AGING_LABELS}

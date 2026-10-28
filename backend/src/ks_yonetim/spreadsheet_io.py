@@ -20,8 +20,6 @@ from .backup import backup_manager
 from .database import get_session
 from .models import (
     Material,
-    MaterialMovement,
-    MovementType,
     Project,
     ProjectExpense,
     Purchase,
@@ -30,6 +28,7 @@ from .models import (
     TrackingMode,
     WorkLog,
 )
+from .receipts import add_receipt
 from .schemas import (
     ImportCommitResult,
     ImportIssue,
@@ -330,16 +329,12 @@ def commit_import(
             purchase = Purchase(material_id=material.id, **data)
             session.add(purchase)
             session.flush()
-            session.add(
-                MaterialMovement(
-                    material_id=material.id,
-                    purchase_id=purchase.id,
-                    movement_date=purchase.purchase_date,
-                    movement_type=MovementType.PURCHASE,
-                    amount_kurus=purchase.total_kurus,
-                    confidence=TrackingMode.VALUE_ONLY,
-                    unit=material.default_unit,
-                )
+            add_receipt(
+                session,
+                purchase,
+                receipt_date=purchase.purchase_date,
+                amount_kurus=purchase.total_kurus,
+                idempotency_key=f"{purchase.idempotency_key}:receipt",
             )
     session.flush()
     add_audit(
@@ -413,7 +408,7 @@ def export_xlsx(kind: str, session: Session = Depends(get_session)) -> Spreadshe
         for project in session.scalars(select(Project).order_by(Project.name)):
             purchases = int(
                 session.scalar(
-                    select(func.sum(Purchase.total_kurus)).where(
+                    select(func.sum(Purchase.received_kurus)).where(
                         Purchase.project_id == project.id, Purchase.status == RecordStatus.ACTIVE
                     )
                 )

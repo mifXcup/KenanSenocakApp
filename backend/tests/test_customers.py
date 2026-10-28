@@ -74,11 +74,6 @@ def test_ledger_idempotency_overcollection_and_reversals(client):
     assert collection.status_code == 201
     assert balance(client, cid) == 700_000
 
-    over = move(client, cid, "collection", 800_000, "col-0002-aaaa")
-    assert over.status_code == 409
-    assert over.json()["error"]["code"] == "overcollection"
-    assert over.json()["error"]["details"]["remaining_kurus"] == 700_000
-
     # Aynı anahtar ve aynı gövde: yeni kayıt yazılmaz.
     again = move(client, cid, "collection", 300_000, "col-0001-aaaa", day="2026-01-20")
     assert again.status_code == 201
@@ -98,11 +93,14 @@ def test_ledger_idempotency_overcollection_and_reversals(client):
     nested = client.post(f"{API}/customer-financial-movements/{reverse.json()['id']}/reverse")
     assert nested.status_code == 409 and nested.json()["error"]["code"] == "cannot_reverse_reversal"
 
-    # Bakiyeyi negatife düşürecek tahakkuk tersi engellenir.
+    # Tahsil edilmiş tahakkukun tersi serbesttir; fazla tahsilat müşteri avansı olur.
     assert move(client, cid, "collection", 1_000_000, "col-0003-aaaa").status_code == 201
-    blocked = client.post(f"{API}/customer-financial-movements/{accrual.json()['id']}/reverse")
-    assert blocked.status_code == 409
-    assert blocked.json()["error"]["code"] == "reversal_makes_credit"
+    undone = client.post(f"{API}/customer-financial-movements/{accrual.json()['id']}/reverse")
+    assert undone.status_code == 201
+    detail = client.get(f"{API}/customers/{cid}").json()
+    assert (detail["receivable_kurus"], detail["credit_kurus"], detail["net_balance_kurus"]) == (
+        0, 1_000_000, -1_000_000
+    )
 
     listed = client.get(f"{API}/customer-financial-movements", params={"customer_id": cid}).json()
     voided = {m["id"]: m["is_voided"] for m in listed}
@@ -141,9 +139,6 @@ def test_schedules_aging_and_fifo_allocation(client):
     ).json()
     linked = move(client, cid, "collection", 10_000, "col-1111-aaaa", day="2026-02-05", receivable_schedule_id=a["id"])
     assert linked.status_code == 201
-    too_much = move(client, cid, "collection", 50_001, "col-1112-aaaa", receivable_schedule_id=a["id"])
-    assert too_much.status_code == 409
-    assert too_much.json()["error"]["details"]["remaining_kurus"] == 50_000
 
     aging = client.get(f"{API}/customers/{cid}/aging", params={"as_of": "2026-02-20"}).json()
     by_bucket = {x["bucket"]: x["amount_kurus"] for x in aging["buckets"]}
@@ -174,7 +169,7 @@ def test_schedule_without_due_date_and_cancellation_rules(client):
     sid = undated.json()["id"]
     assert move(client, cid, "collection", 10_000, "col-2222-aaaa", receivable_schedule_id=sid).status_code == 201
     blocked = client.post(f"{API}/receivable-schedules/{sid}/cancel")
-    assert blocked.status_code == 409 and blocked.json()["error"]["code"] == "schedule_has_movements"
+    assert blocked.status_code == 409 and blocked.json()["error"]["code"] == "schedule_has_allocations"
     lowered = client.patch(f"{API}/receivable-schedules/{sid}", json={"amount_kurus": 5_000})
     assert lowered.status_code == 409 and lowered.json()["error"]["code"] == "amount_below_collected"
 
@@ -224,14 +219,17 @@ def test_statement_running_balance_with_reversal_and_range(client):
     full = client.get(f"{API}/customers/{cid}/statement").json()
     assert full["closing_balance_kurus"] == 120_000
     assert full["opening_balance_kurus"] == 0
-    # Ters kayıt varsayılan olarak orijinal hareket tarihine yazılır: 01-15 tahsilat, 01-15 ters kayıt.
-    assert [r["balance_kurus"] for r in full["rows"]] == [100_000, 60_000, 100_000, 120_000]
+    # Ters kayıt sunucu iş tarihine (2026-03-10) yazılır; geçmiş ekstre değişmez.
+    assert [r["balance_kurus"] for r in full["rows"]] == [100_000, 60_000, 80_000, 120_000]
     assert [r["is_voided"] for r in full["rows"]] == [False, True, False, False]
+    assert full["rows"][-1]["movement_date"] == "2026-03-10"
+    past = client.get(f"{API}/customers/{cid}/statement", params={"date_to": "2026-02-28"}).json()
+    assert past["closing_balance_kurus"] == 80_000
     assert full["total_increase_kurus"] - full["total_decrease_kurus"] == full["closing_balance_kurus"]
 
     ranged = client.get(f"{API}/customers/{cid}/statement", params={"date_from": "2026-01-10", "date_to": "2026-01-31"}).json()
     assert ranged["opening_balance_kurus"] == 100_000
-    assert ranged["closing_balance_kurus"] == 100_000  # tahsilat + ters kayıt aynı gün aralığında dengelenir
+    assert ranged["closing_balance_kurus"] == 60_000  # ters kayıt bu aralığın dışında
     assert client.get(f"{API}/customers/{cid}/statement", params={"date_from": "2026-03-01", "date_to": "2026-01-01"}).status_code == 422
 
 

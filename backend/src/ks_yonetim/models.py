@@ -68,14 +68,6 @@ class EmployeePaymentType(str, enum.Enum):
     WAGE = "wage"
 
 
-def _default_received_kurus(context) -> int:
-    """Doğrudan eklenen satın almalar (içe aktarma, açılış borcu) teslim alınmış kabul edilir."""
-    params = context.get_current_parameters()
-    if params.get("lifecycle_state", "received") in ("planned", "ordered", "cancelled"):
-        return 0
-    return int(params["total_kurus"])
-
-
 class TimestampMixin:
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
@@ -220,10 +212,8 @@ class Purchase(TimestampMixin, Base):
     lifecycle_state: Mapped[str] = mapped_column(
         String(24), default="received", server_default="received"
     )
-    # Teslim alınan (borç/maliyet doğuran) kısım; planlı/siparişte 0, teslimde total_kurus.
-    received_kurus: Mapped[int] = mapped_column(
-        Integer, default=_default_received_kurus, server_default="0"
-    )
+    # Aktif purchase_receipts toplamının önbelleği (aynı transaction'da senkronlanır).
+    received_kurus: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     status: Mapped[RecordStatus] = mapped_column(
         Enum(RecordStatus), default=RecordStatus.ACTIVE, index=True
     )
@@ -268,6 +258,10 @@ class MaterialMovement(TimestampMixin, Base):
     )
     project_id: Mapped[str | None] = mapped_column(ForeignKey("projects.id", ondelete="RESTRICT"))
     purchase_id: Mapped[str | None] = mapped_column(ForeignKey("purchases.id", ondelete="RESTRICT"))
+    # Teslim anında oluşan satın alma hareketi; fiş iptalinde birlikte iptal edilir.
+    purchase_receipt_id: Mapped[str | None] = mapped_column(
+        ForeignKey("purchase_receipts.id"), index=True
+    )
     movement_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     movement_type: Mapped[MovementType] = mapped_column(
         Enum(MovementType), nullable=False, index=True
@@ -689,3 +683,78 @@ class ProjectChangeOrder(TimestampMixin, Base):
     status: Mapped[RecordStatus] = mapped_column(
         Enum(RecordStatus), default=RecordStatus.ACTIVE, index=True
     )
+
+
+class CustomerPaymentAllocation(TimestampMixin, Base):
+    """Tahsilatın alacak planına dağıtımı. Çoktan çoğa; iptal fiziksel silme değil durum değişimidir."""
+
+    __tablename__ = "customer_payment_allocations"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    customer_id: Mapped[str] = mapped_column(
+        ForeignKey("customers.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    collection_id: Mapped[str] = mapped_column(
+        ForeignKey("customer_financial_movements.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    receivable_schedule_id: Mapped[str] = mapped_column(
+        ForeignKey("receivable_schedules.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    amount_kurus: Mapped[int] = mapped_column(Integer, nullable=False)
+    allocation_date: Mapped[date] = mapped_column(Date, nullable=False)
+    note: Mapped[str | None] = mapped_column(Text)
+    idempotency_key: Mapped[str] = mapped_column(String(120), nullable=False, unique=True)
+    status: Mapped[RecordStatus] = mapped_column(
+        Enum(RecordStatus), default=RecordStatus.ACTIVE, index=True
+    )
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cancel_reason: Mapped[str | None] = mapped_column(String(255))
+
+
+class PurchaseReceipt(TimestampMixin, Base):
+    """Satın almanın teslim olayı; borç ve maliyet teslim tarihinde ve bu tutarla doğar."""
+
+    __tablename__ = "purchase_receipts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    purchase_id: Mapped[str] = mapped_column(
+        ForeignKey("purchases.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    receipt_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    quantity: Mapped[Decimal | None] = mapped_column(Numeric(18, 3))
+    amount_kurus: Mapped[int] = mapped_column(Integer, nullable=False)
+    note: Mapped[str | None] = mapped_column(Text)
+    idempotency_key: Mapped[str] = mapped_column(String(120), nullable=False, unique=True)
+    status: Mapped[RecordStatus] = mapped_column(
+        Enum(RecordStatus), default=RecordStatus.ACTIVE, index=True
+    )
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cancel_reason: Mapped[str | None] = mapped_column(String(255))
+
+
+class ProjectCostForecast(Base):
+    """Yönetici kalan maliyet tahmini; her değişiklik yeni revizyon satırıdır (ekleme-yalnız)."""
+
+    __tablename__ = "project_cost_forecasts"
+    __table_args__ = (
+        UniqueConstraint("project_id", "category", "revision_no", name="uq_cost_forecast_revision"),
+        Index("ix_cost_forecast_project_category", "project_id", "category"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    project_id: Mapped[str] = mapped_column(
+        ForeignKey("projects.id", ondelete="RESTRICT"), nullable=False
+    )
+    category: Mapped[str] = mapped_column(String(24), nullable=False)
+    revision_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    # NULL = manuel tahmin kaldırıldı, otomatik artık hesabına dönüldü.
+    remaining_estimate_kurus: Mapped[int | None] = mapped_column(Integer)
+    as_of_date: Mapped[date] = mapped_column(Date, nullable=False)
+    reason: Mapped[str] = mapped_column(String(255), nullable=False)
+    # ACTIVE güncel revizyon, ARCHIVED eski revizyon.
+    status: Mapped[RecordStatus] = mapped_column(
+        Enum(RecordStatus), default=RecordStatus.ACTIVE, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

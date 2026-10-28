@@ -1,19 +1,21 @@
-"""Müşteri kartı, alacak planı ve değişmez müşteri cari defteri.
+"""Müşteri kartı, alacak planı, tahsilat dağıtımı ve değişmez müşteri cari defteri.
 
 Defter modeli: her hareket pozitif tutarlı, değişmez bir satırdır. `direction` müşterinin bize olan
 alacağını artırır (`receivable_increase`: tahakkuk, açılış, iade, artıran düzeltme) veya azaltır
 (`receivable_decrease`: tahsilat, azaltan düzeltme). Ters kayıt orijinali değiştirmez; zıt yönde yeni
 satır yazar ve orijinali "hükümsüz" kılar (bir hareket yalnız bir kez terslenebilir).
 
-Alacak planı (`receivable_schedules`) bir defter hareketi değil beklentidir: tahsilatlar plana
-`receivable_schedule_id` ile bağlanabilir; bağlanmayan tahsilatlar yaşlandırmada en eski vadeden düşülür.
+Alacak planı (`receivable_schedules`) bir defter hareketi değil beklentidir. Tahsilat plana
+`customer_payment_allocations` ile dağıtılır (çoktan çoğa; iptal edilebilir). Dağıtılmamış tahsilat
+yaşlandırmada en eski vadeden düşülür. Tahsilat açık alacağı aşabilir: fazlası müşteri avansı
+(`credit_kurus`) olarak görünür ve sonradan tahakkuk/plana dağıtılabilir.
 """
 
 from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Query
@@ -22,11 +24,13 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from . import clock
 from .api import ApiError, add_audit, require_sidecar_token
 from .database import get_session
 from .models import (
     Customer,
     CustomerFinancialMovement,
+    CustomerPaymentAllocation,
     Project,
     ProjectChangeOrder,
     ReceivableSchedule,
@@ -105,7 +109,11 @@ class CustomerRead(OrmModel):
 
 
 class CustomerDetail(CustomerRead):
-    balance_kurus: int
+    receivable_kurus: int
+    credit_kurus: int
+    net_balance_kurus: int
+    balance_kurus: int  # net_balance_kurus ile aynı (geriye uyumluluk)
+    unallocated_collection_kurus: int
     project_count: int
 
 
@@ -144,9 +152,11 @@ def _customer_detail(session: Session, customer: Customer) -> CustomerDetail:
         )
         or 0
     )
+    position = customer_position(session, customer.id)
     return CustomerDetail(
         **CustomerRead.model_validate(customer).model_dump(),
-        balance_kurus=ledger_balance(session, customer.id),
+        **position,
+        balance_kurus=position["net_balance_kurus"],
         project_count=projects,
     )
 
@@ -282,17 +292,39 @@ def ledger_balance(
     return sum(signed(r) for r in _active_rows(session, customer_id, as_of=as_of, project_id=project_id))
 
 
-def schedule_paid(rows: list[CustomerFinancialMovement]) -> dict[str, int]:
-    """Plana bağlı net tahsilat: bağlı tahsilatlar eksi bağlı iadeler (etkin hareketler)."""
-    paid: dict[str, int] = defaultdict(int)
-    for row in effective_rows(rows):
-        if row.receivable_schedule_id is None:
-            continue
-        if row.movement_type == "collection":
-            paid[row.receivable_schedule_id] += row.amount_kurus
-        elif row.movement_type == "refund":
-            paid[row.receivable_schedule_id] -= row.amount_kurus
-    return dict(paid)
+def allocation_totals(
+    session: Session, customer_id: str, as_of: date | None = None
+) -> tuple[dict[str, int], dict[str, int]]:
+    """Aktif dağıtım toplamları: (plan -> tutar, tahsilat -> tutar)."""
+    query = select(CustomerPaymentAllocation).where(
+        CustomerPaymentAllocation.customer_id == customer_id,
+        CustomerPaymentAllocation.status == RecordStatus.ACTIVE,
+    )
+    if as_of is not None:
+        query = query.where(CustomerPaymentAllocation.allocation_date <= as_of)
+    by_schedule: dict[str, int] = defaultdict(int)
+    by_collection: dict[str, int] = defaultdict(int)
+    for allocation in session.scalars(query):
+        by_schedule[allocation.receivable_schedule_id] += allocation.amount_kurus
+        by_collection[allocation.collection_id] += allocation.amount_kurus
+    return dict(by_schedule), dict(by_collection)
+
+
+def customer_position(session: Session, customer_id: str, as_of: date | None = None) -> dict:
+    rows = _active_rows(session, customer_id, as_of=as_of)
+    net = sum(signed(r) for r in rows)
+    _, by_collection = allocation_totals(session, customer_id, as_of)
+    unallocated = sum(
+        r.amount_kurus - by_collection.get(r.id, 0)
+        for r in effective_rows(rows)
+        if r.movement_type == "collection"
+    )
+    return {
+        "receivable_kurus": max(net, 0),
+        "credit_kurus": max(-net, 0),
+        "net_balance_kurus": net,
+        "unallocated_collection_kurus": unallocated,
+    }
 
 
 @dataclass
@@ -311,27 +343,18 @@ class AgingItem:
 
 def compute_receivables(session: Session, customer_id: str, as_of: date) -> dict:
     rows = _active_rows(session, customer_id, as_of=as_of)
-    balance = sum(signed(r) for r in rows)
+    net = sum(signed(r) for r in rows)
     effective = effective_rows(rows)
-    linked_paid = schedule_paid(rows)
-    unlinked_collected = sum(
-        r.amount_kurus
+    by_schedule, by_collection = allocation_totals(session, customer_id, as_of)
+    collected = sum(r.amount_kurus for r in effective if r.movement_type == "collection")
+    refunded = sum(r.amount_kurus for r in effective if r.movement_type == "refund")
+    corrected = sum(
+        r.amount_kurus if r.direction == DECREASE else -r.amount_kurus
         for r in effective
-        if r.movement_type == "collection" and r.receivable_schedule_id is None
-    ) - sum(
-        r.amount_kurus
-        for r in effective
-        if r.movement_type == "refund" and r.receivable_schedule_id is None
+        if r.movement_type == "correction"
     )
-    unlinked_collected += sum(
-        r.amount_kurus
-        for r in effective
-        if r.movement_type == "correction" and r.direction == DECREASE
-    ) - sum(
-        r.amount_kurus
-        for r in effective
-        if r.movement_type == "correction" and r.direction == INCREASE
-    )
+    # Plana dağıtılmamış tahsilat havuzu yaşlandırmada en eski vadeden düşülür.
+    pool = max(collected - sum(by_collection.values()) - refunded + corrected, 0)
     schedules = list(
         session.scalars(
             select(ReceivableSchedule).where(
@@ -341,10 +364,9 @@ def compute_receivables(session: Session, customer_id: str, as_of: date) -> dict
         )
     )
     schedules.sort(key=lambda s: (s.due_date or date.max, s.created_at, s.id))
-    pool = max(unlinked_collected, 0)
     items: list[AgingItem] = []
     for schedule in schedules:
-        remaining = max(schedule.amount_kurus - linked_paid.get(schedule.id, 0), 0)
+        remaining = max(schedule.amount_kurus - by_schedule.get(schedule.id, 0), 0)
         applied = min(pool, remaining)
         pool -= applied
         remaining -= applied
@@ -366,7 +388,8 @@ def compute_receivables(session: Session, customer_id: str, as_of: date) -> dict
             )
         )
     scheduled_open = sum(i.remaining_kurus for i in items)
-    unscheduled = max(balance - scheduled_open, 0)
+    receivable = max(net, 0)
+    unscheduled = max(receivable - scheduled_open, 0)
     if unscheduled > 0:
         items.append(
             AgingItem(
@@ -379,13 +402,16 @@ def compute_receivables(session: Session, customer_id: str, as_of: date) -> dict
                 title="Plana bağlanmamış bakiye",
             )
         )
+    position = customer_position(session, customer_id, as_of)
     return {
-        "balance_kurus": balance,
+        "balance_kurus": net,
+        "receivable_kurus": receivable,
+        "credit_kurus": position["credit_kurus"],
+        "unallocated_collection_kurus": position["unallocated_collection_kurus"],
         "items": items,
         "scheduled_open_kurus": scheduled_open,
         "unscheduled_kurus": unscheduled,
-        "plan_excess_kurus": max(scheduled_open - max(balance, 0), 0),
-        "credit_kurus": max(-balance, 0),
+        "plan_excess_kurus": max(scheduled_open - receivable, 0),
     }
 
 
@@ -511,9 +537,9 @@ def list_schedules(
     result = []
     for schedule in schedules:
         if schedule.customer_id not in paid_by_customer:
-            paid_by_customer[schedule.customer_id] = schedule_paid(
-                _active_rows(session, schedule.customer_id)
-            )
+            paid_by_customer[schedule.customer_id] = allocation_totals(
+                session, schedule.customer_id
+            )[0]
         read = _schedule_read(schedule, paid_by_customer[schedule.customer_id].get(schedule.id, 0), as_of)
         if state is None or read.payment_state == state:
             result.append(read)
@@ -535,7 +561,7 @@ def update_schedule(
     if schedule.status != RecordStatus.ACTIVE:
         raise ApiError("schedule_cancelled", "İptal edilmiş alacak planı düzenlenemez.", 409)
     changes = payload.model_dump(exclude_unset=True)
-    paid = schedule_paid(_active_rows(session, schedule.customer_id)).get(schedule.id, 0)
+    paid = allocation_totals(session, schedule.customer_id)[0].get(schedule.id, 0)
     if "amount_kurus" in changes and changes["amount_kurus"] < paid:
         raise ApiError(
             "amount_below_collected",
@@ -557,14 +583,20 @@ def cancel_schedule(schedule_id: str, session: Session = Depends(get_session)):
     schedule = _get_schedule(session, schedule_id)
     if schedule.status != RecordStatus.ACTIVE:
         raise ApiError("schedule_cancelled", "Alacak planı zaten iptal edilmiş.", 409)
-    rows = _active_rows(session, schedule.customer_id)
-    linked = [r for r in effective_rows(rows) if r.receivable_schedule_id == schedule.id]
-    if linked:
+    active = list(
+        session.scalars(
+            select(CustomerPaymentAllocation.id).where(
+                CustomerPaymentAllocation.receivable_schedule_id == schedule.id,
+                CustomerPaymentAllocation.status == RecordStatus.ACTIVE,
+            )
+        )
+    )
+    if active:
         raise ApiError(
-            "schedule_has_movements",
-            "Bağlı tahsilat/iade hareketi olan plan önce ters kayıtla çözülmeden iptal edilemez.",
+            "schedule_has_allocations",
+            "Aktif tahsilat dağıtımı olan plan önce dağıtımlar iptal edilmeden iptal edilemez.",
             409,
-            {"movement_ids": [r.id for r in linked]},
+            {"allocation_ids": active},
         )
     schedule.status = RecordStatus.CANCELLED
     add_audit(session, "receivable_schedule", schedule.id, "cancelled")
@@ -601,8 +633,8 @@ class CustomerMovementCreate(BaseModel):
             raise ValueError("Bu hareket türü için geçersiz direction.")
         if self.change_order_id and self.movement_type != "accrual":
             raise ValueError("Ek iş yalnız tahakkuk hareketine bağlanabilir.")
-        if self.receivable_schedule_id and self.movement_type not in {"collection", "refund"}:
-            raise ValueError("Alacak planı yalnız tahsilat veya iade hareketine bağlanabilir.")
+        if self.receivable_schedule_id and self.movement_type != "collection":
+            raise ValueError("Alacak planı yalnız tahsilat hareketine bağlanabilir.")
         return self
 
 
@@ -622,11 +654,13 @@ class CustomerMovementRead(OrmModel):
     source: str
     status: RecordStatus
     is_voided: bool = False
+    allocated_kurus: int | None = None  # yalnız tahsilatta
+    unallocated_kurus: int | None = None
 
 
 class ReverseRequest(BaseModel):
-    # Verilmezse orijinal hareketin tarihi kullanılır (sistem saatine bağlı değildir). Düzenlenmiş bir
-    # ekstreyi bozmamak için dönem sonrası tersleme tarihini açıkça gönderin.
+    # Verilmezse sunucunun iş tarihi (orijinalden önceyse orijinalin tarihi) kullanılır. İstemci her
+    # zaman bugünün tarihini açıkça göndermelidir; geçmiş tarihli ekstreler geriye dönük değişmez.
     movement_date: date | None = None
     note: str | None = Field(default=None, max_length=2000)
     idempotency_key: str | None = Field(default=None, min_length=8, max_length=100)
@@ -664,6 +698,53 @@ def _same_request(existing: CustomerFinancialMovement, payload: CustomerMovement
     )
 
 
+def _decorate(session: Session, reads: list[CustomerMovementRead]) -> list[CustomerMovementRead]:
+    ids = [r.id for r in reads if r.movement_type == "collection"]
+    if not ids:
+        return reads
+    sums = dict(
+        session.execute(
+            select(
+                CustomerPaymentAllocation.collection_id,
+                func.sum(CustomerPaymentAllocation.amount_kurus),
+            )
+            .where(
+                CustomerPaymentAllocation.collection_id.in_(ids),
+                CustomerPaymentAllocation.status == RecordStatus.ACTIVE,
+            )
+            .group_by(CustomerPaymentAllocation.collection_id)
+        ).all()
+    )
+    for read in reads:
+        if read.movement_type == "collection":
+            read.allocated_kurus = int(sums.get(read.id, 0))
+            read.unallocated_kurus = (
+                0 if read.is_voided else read.amount_kurus - read.allocated_kurus
+            )
+    return reads
+
+
+def _auto_allocate(
+    session: Session, movement: CustomerFinancialMovement, schedule: ReceivableSchedule | None
+) -> None:
+    """Plana bağlı tahsilat planın kalanı kadar dağıtılır; fazlası dağıtılmamış (avans) kalır."""
+    if schedule is None or movement.movement_type != "collection":
+        return
+    paid = allocation_totals(session, movement.customer_id)[0].get(schedule.id, 0)
+    amount = min(movement.amount_kurus, max(schedule.amount_kurus - paid, 0))
+    if amount > 0:
+        session.add(
+            CustomerPaymentAllocation(
+                customer_id=movement.customer_id,
+                collection_id=movement.id,
+                receivable_schedule_id=schedule.id,
+                amount_kurus=amount,
+                allocation_date=movement.movement_date,
+                idempotency_key=f"{movement.idempotency_key}:alloc",
+            )
+        )
+
+
 @router.post("/customer-financial-movements", response_model=CustomerMovementRead, status_code=201)
 def create_customer_movement(
     payload: CustomerMovementCreate, session: Session = Depends(get_session)
@@ -678,12 +759,13 @@ def create_customer_movement(
             raise ApiError(
                 "idempotency_conflict", "Bu anahtar farklı bir hareket için kullanılmış.", 409
             )
-        return _movement_read(existing, existing.id in _voided_ids(session, [existing.id]))
+        return _decorate(
+            session, [_movement_read(existing, existing.id in _voided_ids(session, [existing.id]))]
+        )[0]
 
     customer = require_open_customer(session, payload.customer_id)
     _check_project_for_customer(session, customer, payload.project_id)
     rows = _active_rows(session, customer.id)
-    balance = sum(signed(r) for r in rows)
 
     if payload.change_order_id:
         order = session.get(ProjectChangeOrder, payload.change_order_id)
@@ -700,6 +782,7 @@ def create_customer_movement(
                 "change_order_not_approved", "Yalnız onaylı ek iş tahakkuk edilebilir.", 409
             )
 
+    schedule = None
     if payload.receivable_schedule_id:
         schedule = _get_schedule(session, payload.receivable_schedule_id)
         if schedule.customer_id != customer.id:
@@ -708,22 +791,6 @@ def create_customer_movement(
             raise ApiError("schedule_cancelled", "İptal edilmiş plana hareket bağlanamaz.", 409)
         if payload.project_id and schedule.project_id and payload.project_id != schedule.project_id:
             raise ApiError("schedule_project_mismatch", "Plan başka bir projeye ait.", 409)
-        if payload.movement_type == "collection":
-            remaining = schedule.amount_kurus - schedule_paid(rows).get(schedule.id, 0)
-            if payload.amount_kurus > remaining:
-                raise ApiError(
-                    "overcollection",
-                    "Tahsilat planın kalan tutarını aşıyor.",
-                    409,
-                    {"remaining_kurus": max(remaining, 0)},
-                )
-    if payload.movement_type == "collection" and payload.amount_kurus > max(balance, 0):
-        raise ApiError(
-            "overcollection",
-            "Tahsilat müşterinin kalan alacağını aşıyor.",
-            409,
-            {"remaining_kurus": max(balance, 0)},
-        )
     if payload.movement_type == "refund":
         collected = sum(
             r.amount_kurus if r.movement_type == "collection" else -r.amount_kurus
@@ -744,6 +811,7 @@ def create_customer_movement(
     session.add(movement)
     try:
         session.flush()
+        _auto_allocate(session, movement, schedule)
         add_audit(
             session, "customer_movement", movement.id, "created",
             {
@@ -759,7 +827,7 @@ def create_customer_movement(
             "idempotency_conflict", "Bu anahtar başka bir kayıtta kullanılmış.", 409
         ) from exc
     session.refresh(movement)
-    return _movement_read(movement)
+    return _decorate(session, [_movement_read(movement)])[0]
 
 
 @router.get("/customer-financial-movements", response_model=list[CustomerMovementRead])
@@ -800,7 +868,28 @@ def list_customer_movements(
         )
     )
     voided = _voided_ids(session, [r.id for r in rows])
-    return [_movement_read(r, r.id in voided) for r in rows]
+    return _decorate(session, [_movement_read(r, r.id in voided) for r in rows])
+
+
+def _cancel_allocations_of(
+    session: Session, collection: CustomerFinancialMovement, reason: str
+) -> list[str]:
+    cancelled = []
+    for allocation in session.scalars(
+        select(CustomerPaymentAllocation).where(
+            CustomerPaymentAllocation.collection_id == collection.id,
+            CustomerPaymentAllocation.status == RecordStatus.ACTIVE,
+        )
+    ):
+        allocation.status = RecordStatus.CANCELLED
+        allocation.cancelled_at = datetime.now(UTC)
+        allocation.cancel_reason = reason
+        add_audit(
+            session, "customer_payment_allocation", allocation.id, "cancelled",
+            {"reason": reason, "collection_id": collection.id},
+        )
+        cancelled.append(allocation.id)
+    return cancelled
 
 
 @router.post("/customer-financial-movements/{movement_id}/reverse", response_model=CustomerMovementRead, status_code=201)
@@ -829,21 +918,13 @@ def reverse_customer_movement(
             422,
             {"original_date": original.movement_date},
         )
-    rows = _active_rows(session, original.customer_id)
-    balance_after = sum(signed(r) for r in rows) - signed(original)
-    if balance_after < 0:
-        raise ApiError(
-            "reversal_makes_credit",
-            "Bu hareketin terslenmesi müşteri bakiyesini negatife düşürür; önce ilgili tahsilatları tersleyin.",
-            409,
-            {"balance_after_kurus": balance_after},
-        )
+    reversal_date = payload.movement_date or max(clock.business_today(), original.movement_date)
     reversal = CustomerFinancialMovement(
         customer_id=original.customer_id,
         project_id=original.project_id,
         receivable_schedule_id=original.receivable_schedule_id,
         change_order_id=original.change_order_id,
-        movement_date=payload.movement_date or original.movement_date,
+        movement_date=reversal_date,
         movement_type="reversal",
         direction=DECREASE if original.direction == INCREASE else INCREASE,
         amount_kurus=original.amount_kurus,
@@ -855,8 +936,10 @@ def reverse_customer_movement(
     session.add(reversal)
     try:
         session.flush()
+        cancelled = _cancel_allocations_of(session, original, "Tahsilat ters kaydı")
         add_audit(
-            session, "customer_movement", original.id, "reversed", {"reversal_id": reversal.id}
+            session, "customer_movement", original.id, "reversed",
+            {"reversal_id": reversal.id, "cancelled_allocation_ids": cancelled},
         )
         session.commit()
     except IntegrityError as exc:
@@ -920,6 +1003,8 @@ def customer_statement(
         "total_increase_kurus": total_in,
         "total_decrease_kurus": total_out,
         "closing_balance_kurus": running,
+        "closing_receivable_kurus": max(running, 0),
+        "closing_credit_kurus": max(-running, 0),
         "rows": lines,
     }
 
@@ -929,7 +1014,7 @@ def customer_aging(
     customer_id: str, session: Session = Depends(get_session), as_of: date | None = None
 ):
     customer = get_customer(session, customer_id)
-    day = as_of or date.today()
+    day = as_of or clock.business_today()
     result = compute_receivables(session, customer.id, day)
     buckets = {name: [0, 0] for name in AGING_NAMES.values()}
     for item in result["items"]:
@@ -940,7 +1025,11 @@ def customer_aging(
         "customer_id": customer.id,
         "as_of": day,
         "balance_kurus": result["balance_kurus"],
+        "net_balance_kurus": result["balance_kurus"],
+        "receivable_kurus": result["receivable_kurus"],
         "open_receivable_kurus": sum(v[0] for v in buckets.values()),
+        "advance_kurus": result["credit_kurus"],  # gecikmiş alacaktan ayrı gösterilir
+        "unallocated_collection_kurus": result["unallocated_collection_kurus"],
         "overdue_kurus": overdue,
         "unscheduled_kurus": result["unscheduled_kurus"],
         "plan_excess_kurus": result["plan_excess_kurus"],
@@ -963,3 +1052,173 @@ def customer_aging(
             for i in result["items"]
         ],
     }
+
+
+# --- Tahsilat dağıtımı ------------------------------------------------------------------------------
+
+
+class AllocationCreate(BaseModel):
+    collection_id: str
+    receivable_schedule_id: str
+    amount_kurus: int = Field(gt=0)
+    allocation_date: date | None = None
+    note: str | None = Field(default=None, max_length=2000)
+    idempotency_key: str = Field(min_length=8, max_length=100)
+
+
+class AllocationCancel(BaseModel):
+    reason: str | None = Field(default=None, max_length=255)
+
+
+class AllocationRead(OrmModel):
+    id: str
+    customer_id: str
+    collection_id: str
+    receivable_schedule_id: str
+    amount_kurus: int
+    allocation_date: date
+    note: str | None
+    idempotency_key: str
+    status: RecordStatus
+    cancelled_at: datetime | None
+    cancel_reason: str | None
+
+
+@router.post("/customer-payment-allocations", response_model=AllocationRead, status_code=201)
+def create_allocation(payload: AllocationCreate, session: Session = Depends(get_session)):
+    existing = session.scalar(
+        select(CustomerPaymentAllocation).where(
+            CustomerPaymentAllocation.idempotency_key == payload.idempotency_key
+        )
+    )
+    if existing is not None:
+        if (
+            existing.collection_id != payload.collection_id
+            or existing.receivable_schedule_id != payload.receivable_schedule_id
+            or existing.amount_kurus != payload.amount_kurus
+        ):
+            raise ApiError(
+                "idempotency_conflict", "Bu anahtar farklı bir dağıtım için kullanılmış.", 409
+            )
+        return existing
+
+    collection = session.get(CustomerFinancialMovement, payload.collection_id)
+    if (
+        collection is None
+        or collection.status != RecordStatus.ACTIVE
+        or collection.movement_type != "collection"
+    ):
+        raise ApiError("not_found", "Tahsilat bulunamadı.", 404)
+    if _voided_ids(session, [collection.id]):
+        raise ApiError("collection_reversed", "Terslenmiş tahsilat dağıtılamaz.", 409)
+    customer = require_open_customer(session, collection.customer_id)
+    schedule = _get_schedule(session, payload.receivable_schedule_id)
+    if schedule.customer_id != customer.id:
+        raise ApiError("schedule_customer_mismatch", "Plan başka bir müşteriye ait.", 409)
+    if schedule.status != RecordStatus.ACTIVE:
+        raise ApiError("schedule_cancelled", "İptal edilmiş plana dağıtım yapılamaz.", 409)
+
+    by_schedule, by_collection = allocation_totals(session, customer.id)
+    unallocated = collection.amount_kurus - by_collection.get(collection.id, 0)
+    if payload.amount_kurus > unallocated:
+        raise ApiError(
+            "allocation_exceeds_collection",
+            "Dağıtım tahsilatın dağıtılmamış tutarını aşıyor.",
+            409,
+            {"unallocated_kurus": unallocated},
+        )
+    room = schedule.amount_kurus - by_schedule.get(schedule.id, 0)
+    if payload.amount_kurus > room:
+        raise ApiError(
+            "allocation_exceeds_schedule",
+            "Dağıtım planın kalan tutarını aşıyor.",
+            409,
+            {"remaining_kurus": max(room, 0)},
+        )
+    day = payload.allocation_date or max(clock.business_today(), collection.movement_date)
+    if day < collection.movement_date:
+        raise ApiError(
+            "invalid_allocation_date",
+            "Dağıtım tarihi tahsilat tarihinden önce olamaz.",
+            422,
+            {"collection_date": collection.movement_date},
+        )
+    allocation = CustomerPaymentAllocation(
+        customer_id=customer.id,
+        collection_id=collection.id,
+        receivable_schedule_id=schedule.id,
+        amount_kurus=payload.amount_kurus,
+        allocation_date=day,
+        note=payload.note,
+        idempotency_key=payload.idempotency_key,
+    )
+    session.add(allocation)
+    try:
+        session.flush()
+        add_audit(
+            session, "customer_payment_allocation", allocation.id, "created",
+            {
+                "collection_id": collection.id,
+                "receivable_schedule_id": schedule.id,
+                "amount_kurus": allocation.amount_kurus,
+            },
+        )
+        session.commit()
+    except IntegrityError as exc:
+        session.rollback()
+        raise ApiError(
+            "idempotency_conflict", "Bu anahtar başka bir kayıtta kullanılmış.", 409
+        ) from exc
+    session.refresh(allocation)
+    return allocation
+
+
+@router.get("/customer-payment-allocations", response_model=list[AllocationRead])
+def list_allocations(
+    session: Session = Depends(get_session),
+    customer_id: str | None = None,
+    collection_id: str | None = None,
+    receivable_schedule_id: str | None = None,
+    include_cancelled: bool = False,
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+):
+    query = select(CustomerPaymentAllocation)
+    if customer_id:
+        query = query.where(CustomerPaymentAllocation.customer_id == customer_id)
+    if collection_id:
+        query = query.where(CustomerPaymentAllocation.collection_id == collection_id)
+    if receivable_schedule_id:
+        query = query.where(
+            CustomerPaymentAllocation.receivable_schedule_id == receivable_schedule_id
+        )
+    if not include_cancelled:
+        query = query.where(CustomerPaymentAllocation.status == RecordStatus.ACTIVE)
+    return session.scalars(
+        query.order_by(CustomerPaymentAllocation.allocation_date, CustomerPaymentAllocation.id)
+        .limit(limit)
+        .offset(offset)
+    ).all()
+
+
+@router.post("/customer-payment-allocations/{allocation_id}/cancel", response_model=AllocationRead)
+def cancel_allocation(
+    allocation_id: str,
+    payload: AllocationCancel | None = None,
+    session: Session = Depends(get_session),
+):
+    allocation = session.get(CustomerPaymentAllocation, allocation_id)
+    if allocation is None:
+        raise ApiError("not_found", "Dağıtım bulunamadı.", 404)
+    if allocation.status != RecordStatus.ACTIVE:
+        raise ApiError("allocation_cancelled", "Dağıtım zaten iptal edilmiş.", 409)
+    reason = payload.reason if payload else None
+    allocation.status = RecordStatus.CANCELLED
+    allocation.cancelled_at = datetime.now(UTC)
+    allocation.cancel_reason = reason
+    add_audit(
+        session, "customer_payment_allocation", allocation.id, "cancelled", {"reason": reason}
+    )
+    session.commit()
+    session.refresh(allocation)
+    return allocation

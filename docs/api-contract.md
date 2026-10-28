@@ -256,7 +256,7 @@ ile sayfalanır. `as_of` verilmezse sunucu tarihi kullanılır; tekrar edilebili
 | POST/GET | `/projects/{id}/change-orders` | Ek iş / kapsam değişikliği (`state` filtresi) |
 | PATCH | `/projects/{id}/change-orders/{order_id}` | Yalnız taslak düzenlenir |
 | POST | `/projects/{id}/change-orders/{order_id}/approve`, `/reject`, `/cancel` | Durum geçişi (gövde: `note`) |
-| POST | `/purchases/{id}/lifecycle` | Satın alma yaşam döngüsü geçişi |
+| POST | `/purchases/{id}/lifecycle` | Satın alma yaşam döngüsü geçişi (teslim geçişleri fiş yazar) |
 | GET | `/projects/{id}/profitability` | Taahhüt, gerçekleşen, kalan tahmin, tahmini bitiş maliyeti ve kâr |
 | GET | `/projects/{id}/cost-drilldown` | Her toplamın kaynak kayıt kimlikleri (`category`, `limit`) |
 | GET | `/suppliers/{id}/statement` | Tedarikçi ekstresi, yürüyen bakiye (`date_from`, `date_to`) |
@@ -294,27 +294,27 @@ yanıtı `customer_id` taşır, `customer_name` orijinal metin olarak kalır. `P
 ### Hesap kuralları
 
 - Müşteri bakiyesi = artıran hareketler − azaltan hareketler (ters satırlar zıt yönde yazıldığı için toplam doğrudur).
-- Tahsilat kalan alacağı (ve bağlı planın kalanını) aşamaz → `overcollection`. İade net tahsilatı aşamaz → `overrefund`.
-- Tahsilatın değil, bakiyeyi negatife düşürecek bir hareketin (ör. tahsil edilmiş tahakkukun) ters kaydı reddedilir →
-  `reversal_makes_credit`.
-- Ters kayıt tarihi varsayılan olarak orijinal hareketin tarihidir; dönem sonrası düzeltmede `movement_date` gönderin
-  (orijinalden önce olamaz → `invalid_reversal_date`).
-- Plana bağlı tahsilat o planı düşürür; bağlanmayan tahsilat yaşlandırmada en eski vadeden düşülür. Plana bağlanmamış
-  bakiye `unscheduled_kurus` ve `no_due_date` kovasında gösterilir; planlar bakiyeyi aşarsa `plan_excess_kurus` bilgi verir.
+- Tahsilat açık alacaktan fazla olabilir; fazlası müşteri avansı/kredisi olur (WP-B1.1). İade net tahsilatı aşamaz →
+  `overrefund`. `overcollection` ve `reversal_makes_credit` kodları kaldırıldı.
+- Ters kayıt tarihi WP-B1.1 ile sunucu iş tarihidir (aşağıya bakın); istemci her zaman bugünün tarihini göndermelidir.
+- Tahsilatın planlara dağıtımı `customer_payment_allocations` ile yapılır; dağıtılmayan tahsilat yaşlandırmada en eski
+  vadeden düşülür. Plana bağlanmamış bakiye `unscheduled_kurus` ve `no_due_date` kovasında gösterilir; planlar
+  bakiyeyi aşarsa `plan_excess_kurus` bilgi verir.
 - Yaşlandırma kovaları: `not_due`, `1_30`, `31_60`, `61_90`, `90_plus`, `no_due_date`.
-- Satın alma borcu ve proje maliyeti `received_kurus` üzerinden hesaplanır (planlı/siparişte 0). Eski kayıtlar `received`
-  kabul edilir. Teslim edilmemiş siparişe yapılan ön ödeme tedarikçi avansı (`credit_kurus`) olarak görünür.
+- Satın alma borcu ve proje maliyeti teslim fişlerinin (`purchase_receipts`) tarih ve tutarıyla hesaplanır
+  (`received_kurus` aktif fişlerin toplamıdır; planlı/siparişte 0). Eski kayıtlar tek başlangıç fişine dönüştürüldü. Teslim edilmemiş siparişe yapılan ön ödeme tedarikçi avansı (`credit_kurus`) olarak görünür.
 - Taahhüt = planlı/siparişli satın almanın tamamı + kısmi tesliminin teslim edilmemiş kısmı.
-- Kalan tahmin (kategori) = `max(kategori bütçesi − gerçekleşen − taahhüt, 0)`; kategori bütçesi yoksa 0. Satır bazlı bütçe
-  yoksa proje geneli `budget_kurus` esas alınır (`budget_source = project_budget`), tek kalemde tahmin edilir.
+- Kalan tahmin (kategori): manuel tahmin varsa o (`forecast_source = manual`, bütçeyi aşabilir), yoksa otomatik
+  `max(kategori bütçesi − gerçekleşen − taahhüt, 0)` (`forecast_source = auto`; bütçe yoksa 0). Satır bazlı bütçe
+  yoksa proje geneli `budget_kurus` esas alınır (`budget_source = project_budget`), manuel tahminler bu bütçeden
+  harcanmış sayılır ve kalan genel artık tek kalemde tahmin edilir.
 - Tahmini bitiş maliyeti = gerçekleşen + taahhüt + kalan tahmin. Tahmini kâr = revize sözleşme − tahmini bitiş maliyeti;
   marj = kâr / revize sözleşme × 100 (2 ondalık). Sözleşme yoksa kâr ve marj `null` döner.
 - Revize sözleşme = `contract_amount_kurus` + onaylı ek işler toplamı (sözleşme ve ek iş yoksa `null`).
 - `cost-drilldown` ve `profitability` aynı kaynak listesinden üretilir: her kategorinin `actual_sources` /
-  `commitment_sources` toplamı ilgili toplama eşittir. Kaynak türleri: `purchase`, `work_log`, `project_expense`.
-- Bilinen sınır: planlı/siparişli satın alma henüz malzeme hareketi yazmaz; hareket teslimde (`received`) oluşur. Kısmi
-  teslimde malzeme hareketi yazılmaz. Excel/PDF dışa aktarımlarında satın alma listeleri tüm aktif satırları gösterir (WP-B4'te
-  yaşam döngüsüne göre uyarlanacaktır).
+  `commitment_sources` toplamı ilgili toplama eşittir. Kaynak türleri: `purchase_receipt` (gerçekleşen), `purchase` (taahhüt), `work_log`, `project_expense`.
+- Malzeme hareketi teslim fişi yazılırken oluşur (miktar varsa veya malzeme `value_only` ise); planlı/siparişte hareket
+  yoktur. Excel/PDF dışa aktarımlarında satın alma listeleri tüm aktif satırları gösterir (WP-B4'te uyarlanacaktır).
 
 ### Hata kodları (yeni)
 
@@ -326,14 +326,12 @@ yanıtı `customer_id` taşır, `customer_name` orijinal metin olarak kalır. `P
 | `project_customer_mismatch` | 409 | Proje başka müşteriye ait |
 | `schedule_customer_mismatch`, `schedule_project_mismatch` | 409 | Plan başka müşteri/projeye ait |
 | `schedule_cancelled` | 409 | İptal edilmiş plana işlem |
-| `schedule_has_movements` | 409 | Bağlı hareketi olan plan iptal edilemez |
+| `schedule_has_allocations` | 409 | Aktif tahsilat dağıtımı olan plan iptal edilemez |
 | `amount_below_collected` | 409 | Plan tutarı tahsilatın altına indirilemez |
-| `overcollection` | 409 | Fazla tahsilat (`details.remaining_kurus`) |
 | `overrefund` | 409 | Fazla iade (`details.refundable_kurus`) |
 | `idempotency_conflict` | 409 | Aynı anahtar farklı bir hareketle kullanılmış |
 | `already_reversed` | 409 | Hareket/ödeme zaten terslenmiş |
 | `cannot_reverse_reversal` | 409 | Ters kayıt tekrar terslenemez |
-| `reversal_makes_credit` | 409 | Tersleme bakiyeyi negatife düşürür |
 | `invalid_reversal_date` | 422 | Ters kayıt tarihi orijinalden önce |
 | `change_order_not_approved` | 409 | Onaysız ek iş tahakkuk edilemez |
 | `change_order_project_mismatch` | 409 | Tahakkuk ek işin projesine yazılmalıdır |
@@ -399,10 +397,115 @@ yanıtı `customer_id` taşır, `customer_name` orijinal metin olarak kalır. `P
   "categories": [
     {"category": "material", "actual_kurus": 400000, "commitment_kurus": 150000,
      "actual_source_count": 1, "commitment_source_count": 1, "truncated": false,
-     "actual_sources": [{"source_type": "purchase", "source_id": "uuid", "date": "2026-02-01",
-                         "amount_kurus": 400000, "label": "MDF", "lifecycle_state": "received"}],
-     "commitment_sources": [{"source_type": "purchase", "source_id": "uuid", "date": "2026-02-01",
-                             "amount_kurus": 150000, "label": "MDF", "lifecycle_state": "planned"}]}
+     "actual_sources": [{"source_type": "purchase_receipt", "source_id": "uuid", "purchase_id": "uuid",
+                         "date": "2026-02-01", "amount_kurus": 400000, "label": "MDF",
+                         "lifecycle_state": "received"}],
+     "commitment_sources": [{"source_type": "purchase", "source_id": "uuid", "purchase_id": "uuid",
+                             "date": "2026-02-01", "amount_kurus": 150000, "label": "MDF",
+                             "lifecycle_state": "planned"}],
+     "remaining_estimate_kurus": 0, "forecast_source": "auto", "forecast_kurus": 550000}
+  ]
+}
+```
+
+
+## P0 / WP-B1.1 — Avans, ters kayıt tarihi, teslim fişleri, manuel tahmin
+
+WP-B1 (19b18b8) sözleşmesinden farklar. Bu bölüm çelişen B1 ifadelerinin yerine geçer.
+
+### 1. Müşteri avansı ve tahsilat dağıtımı
+
+Tahsilat açık alacaktan fazla olabilir ve tahakkuk veya plan oluşmadan (kapora) girilebilir. Defter tek bir net
+bakiye tutar: `net_balance_kurus = artıran − azaltan hareketler`; `receivable_kurus = max(net, 0)`,
+`credit_kurus = max(−net, 0)`. Kullanılmamış tutar kredi olarak görünür; sonradan gelen tahakkuk krediyi otomatik
+mahsup eder. `GET /customers/{id}` yanıtı: `receivable_kurus`, `credit_kurus`, `net_balance_kurus` (`balance_kurus` ile
+aynı), `unallocated_collection_kurus` (planlara dağıtılmamış tahsilat toplamı), `project_count`. Ekstre yanıtı
+`closing_receivable_kurus`, `closing_credit_kurus` taşır (satır `balance_kurus` negatifse kredi). Yaşlandırma yanıtı
+`receivable_kurus`, `net_balance_kurus`, `advance_kurus` (avans; gecikmiş alacağa dahil değildir),
+`unallocated_collection_kurus` döner; `overdue_kurus` yalnız alacaktır.
+
+| Method | Yol | Amaç |
+| --- | --- | --- |
+| POST | `/customer-payment-allocations` | Tahsilatı plana dağıt (`collection_id`, `receivable_schedule_id`, `amount_kurus`, `allocation_date?`, `idempotency_key`) |
+| GET | `/customer-payment-allocations` | Listele (`customer_id`, `collection_id`, `receivable_schedule_id`, `include_cancelled`) |
+| POST | `/customer-payment-allocations/{id}/cancel` | Dağıtımı iptal et (gövde: `reason?`); fiziksel silme yok |
+
+- Bir tahsilat birden fazla plana, bir plan birden fazla tahsilata dağıtılabilir. Plan durumu (`payment_state`: `open`,
+  `partial`, `paid`, `overdue`, `cancelled`) aktif dağıtım toplamından türetilir.
+- `POST /customer-financial-movements` ile `receivable_schedule_id` gönderilen tahsilat, planın kalanı kadar otomatik
+  dağıtılır; fazlası dağıtılmamış (avans) kalır. Tahsilat yanıtı `allocated_kurus`, `unallocated_kurus` taşır.
+  `receivable_schedule_id` yalnız `collection` hareketinde geçerlidir (iade/diğerlerinde `422`).
+- Tahsilat terslenince aktif dağıtımları aynı transaction'da iptal edilir (her biri audit'e yazılır,
+  `cancel_reason = "Tahsilat ters kaydı"`). Terslenmiş tahsilat yeniden dağıtılamaz (`collection_reversed`).
+- Planın aktif dağıtımı varsa plan iptal edilemez (`schedule_has_allocations`); plan tutarı dağıtımın altına inemez
+  (`amount_below_collected`).
+- Dağıtım tarihi verilmezse sunucu iş tarihi (tahsilat tarihinden önceyse tahsilat tarihi) kullanılır.
+- Yeni hata kodları: `allocation_exceeds_collection` (`details.unallocated_kurus`), `allocation_exceeds_schedule`
+  (`details.remaining_kurus`), `allocation_cancelled`, `collection_reversed`, `invalid_allocation_date` (422),
+  `schedule_has_allocations`. Kaldırılan kodlar: `overcollection`, `reversal_makes_credit`, `schedule_has_movements`.
+
+### 2. Ters kayıt tarihi
+
+`POST /customer-financial-movements/{id}/reverse` gövdesi: `movement_date?`, `note?`, `idempotency_key?`.
+`movement_date` verilmezse sunucunun iş tarihi kullanılır (orijinal hareket gelecek tarihliyse orijinalin tarihi).
+Verilen tarih orijinalden önce olamaz (`invalid_reversal_date`, 422). **İstemci her zaman bugünün tarihini açıkça
+gönderir.** Böylece geçmiş tarihli ekstreler sonradan yapılan düzeltmeyle geriye dönük değişmez. İş tarihi tek bir
+noktadan (`ks_yonetim.clock.business_today`) okunur; testler bunu sabitler.
+
+### 3. Satın alma teslim fişleri
+
+| Method | Yol | Amaç |
+| --- | --- | --- |
+| POST | `/purchases/{id}/receipts` | Teslim kaydı (`receipt_date`, `amount_kurus`, `quantity?`, `note?`, `idempotency_key`) |
+| GET | `/purchases/{id}/receipts` | Fişler (`include_cancelled`) |
+| POST | `/purchase-receipts/{id}/cancel` | Fişi iptal et (gövde: `reason?`); fiziksel silme yok |
+
+- Borç, maliyet ve taahhüt hesapları fişlerin tarih ve tutarına dayanır: tedarikçi bakiyesi/ekstresi, borç yaşlandırması
+  (`as_of` tarihine kadarki fişler), alış raporu (`date_from`/`date_to` fiş tarihine göre; satın alma sayısı ayrı satın alma
+  başınadır), `GET /projects/{id}/cost-summary` tarih aralığı, profitability ve drilldown.
+- `received_kurus` aktif fişlerin toplamıdır ve aynı transaction'da senkronlanır; `lifecycle_state` buradan türetilir
+  (`0 → ordered/planned korunur`, `< total → partially_received`, `= total → received`). Son fiş iptal edilirse durum
+  `ordered` olur. Toplam satın alma tutarını aşan fiş reddedilir (`receipt_exceeds_total`, `details.remaining_kurus`).
+- `POST /purchases/{id}/lifecycle` teslim geçişlerinde fiş yazar: `partially_received` (`received_kurus` = kümülatif
+  tutar), `received` (kalan tutar; miktar varsa kalan miktar). İsteğe bağlı `receipt_date`, `idempotency_key`; tarih
+  verilmezse iş tarihi. İstemci tarihi açıkça göndermelidir.
+- `POST /purchases` `received` durumunda satın alma tarihinde tek fiş yazar. Satın alma iptali aktif fişleri iptal eder.
+  Açılış borcu aktarımı da fiş yazar.
+- Malzeme hareketi teslim anında oluşur: fişte miktar varsa veya malzeme `value_only` ise. `exact`/`estimated` malzemede
+  miktarsız fiş hareket yazmaz. Hareket fişe (`purchase_receipt_id`) bağlıdır; fiş iptalinde birlikte iptal edilir.
+  Stok kesinliği zorunlu değildir; `tracking_mode` kuralları değişmedi.
+- Drilldown `actual_sources` artık `purchase_receipt` kaynaklarıdır (`source_id` = fiş, `purchase_id` = satın alma);
+  `commitment_sources` satın alma düzeyinde kalır (`source_type = purchase`).
+- Tedarikçi ekstresinde `row_type = purchase` yerine `purchase_receipt` kullanılır.
+- Yeni hata kodları: `receipt_exceeds_total`, `receipt_cancelled`.
+
+### 4. Manuel kalan maliyet tahmini
+
+| Method | Yol | Amaç |
+| --- | --- | --- |
+| GET | `/projects/{id}/cost-forecasts` | Kategori başına etkin tahmin (`forecast_source`, otomatik değer, revizyon) |
+| PUT | `/projects/{id}/cost-forecasts` | Gövde `{"items": [{category, remaining_estimate_kurus \| null, as_of_date, reason}]}`; atomik |
+| GET | `/projects/{id}/cost-forecasts/history` | Tüm revizyonlar (`category` filtresi) |
+
+- `reason` zorunludur (3–255 karakter); her PUT yeni revizyon yazar, eski revizyon `is_current = false` olur (silinmez).
+  `remaining_estimate_kurus: null` manuel tahmini kaldırır ve otomatik hesaba döner (kaldırılacak yoksa
+  `no_manual_forecast`, 409). Aynı kategori bir istekte bir kez gönderilir; hata varsa hiçbir kategori yazılmaz.
+- Manuel tahmin bütçeden büyük veya otomatik değerden küçük olabilir. `GET /projects/{id}/profitability` kategori satırları:
+  `forecast_source` (`auto` \| `manual`), `auto_remaining_estimate_kurus`, `remaining_estimate_kurus` (etkin),
+  `forecast_revision_no`, `forecast_as_of_date`, `forecast_reason`; üst düzey `manual_forecast_count`.
+  Tahmini bitiş maliyeti etkin kalan tahmini esas alır. `cost-drilldown` kategori satırları aynı
+  `remaining_estimate_kurus`, `forecast_source`, `forecast_kurus` değerlerini taşır.
+- Örnek (`GET /projects/{id}/cost-forecasts`):
+
+```json
+{
+  "project_id": "uuid",
+  "forecasts": [
+    {"category": "material", "forecast_source": "manual", "remaining_estimate_kurus": 700000,
+     "auto_remaining_estimate_kurus": 400000, "revision_no": 2, "as_of_date": "2026-03-15",
+     "reason": "Tedarikçi indirimi"},
+    {"category": "labor", "forecast_source": "auto", "remaining_estimate_kurus": 300000,
+     "auto_remaining_estimate_kurus": 300000, "revision_no": null, "as_of_date": null, "reason": null}
   ]
 }
 ```
