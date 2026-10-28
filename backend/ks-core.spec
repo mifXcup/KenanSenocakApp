@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 
 hiddenimports = (
@@ -12,7 +12,7 @@ analysis = Analysis(
     ["src/ks_yonetim/sidecar.py"],
     pathex=["src"],
     binaries=[],
-    datas=[("migrations", "migrations")],
+    datas=[("migrations", "migrations")] + collect_data_files("reportlab", includes=["fonts/Vera.ttf"]),
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
