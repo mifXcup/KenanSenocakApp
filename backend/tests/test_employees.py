@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from datetime import date
+
+from ks_yonetim import clock
+
 
 def make_employee(client, **overrides):
     payload = {"name": "Ahmet Usta", "wage_type": "daily", "current_rate_kurus": 80000}
@@ -81,7 +85,9 @@ def test_employee_list_filters_patch_and_archive(client):
     assert client.patch(f"/api/v1/employees/{first['id']}", json={"note": "x"}).status_code == 409
 
 
-def test_wage_rates_do_not_overlap_and_close_previous_period(client):
+def test_wage_rates_do_not_overlap_and_close_previous_period(client, monkeypatch):
+    # "Güncel ücret" iş tarihine göre türetilir; test sistem saatine değil sabit tarihe bağlıdır.
+    monkeypatch.setattr(clock, "business_today", lambda: date(2026, 10, 1))
     employee = make_employee(client, rate_effective_from="2026-01-01")
     url = f"/api/v1/employees/{employee['id']}/wage-rates"
 

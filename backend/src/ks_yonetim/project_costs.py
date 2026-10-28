@@ -22,6 +22,7 @@ from .models import (
     Project,
     ProjectExpense,
     Purchase,
+    PurchaseReceipt,
     RecordStatus,
     Site,
     WorkLog,
@@ -40,6 +41,8 @@ class ProjectCostSummaryOut(BaseModel):
     installation_kurus: int
     site_kurus: int
     other_kurus: int
+    subcontract_kurus: int = 0
+    rework_kurus: int = 0
     total_cost_kurus: int
     budget_kurus: int | None
     budget_variance_kurus: int | None
@@ -57,6 +60,8 @@ class SiteCostSummaryOut(BaseModel):
     installation_kurus: int
     site_kurus: int
     other_kurus: int
+    subcontract_kurus: int = 0
+    rework_kurus: int = 0
     total_cost_kurus: int
     note: str
 
@@ -92,15 +97,20 @@ def _labor(session: Session, column, value: str, date_from, date_to) -> int:
 def project_cost_summary(
     session: Session, project: Project, date_from: date | None = None, date_to: date | None = None
 ) -> ProjectCostSummaryOut:
-    purchase_query = select(func.sum(Purchase.total_kurus)).where(
-        Purchase.project_id == project.id,
-        Purchase.status == RecordStatus.ACTIVE,
-        ~Purchase.idempotency_key.like(f"{OPENING_PREFIX}%"),
+    purchase_query = (
+        select(func.sum(PurchaseReceipt.amount_kurus))
+        .join(Purchase, Purchase.id == PurchaseReceipt.purchase_id)
+        .where(
+            Purchase.project_id == project.id,
+            Purchase.status == RecordStatus.ACTIVE,
+            PurchaseReceipt.status == RecordStatus.ACTIVE,
+            ~Purchase.idempotency_key.like(f"{OPENING_PREFIX}%"),
+        )
     )
     if date_from:
-        purchase_query = purchase_query.where(Purchase.purchase_date >= date_from)
+        purchase_query = purchase_query.where(PurchaseReceipt.receipt_date >= date_from)
     if date_to:
-        purchase_query = purchase_query.where(Purchase.purchase_date <= date_to)
+        purchase_query = purchase_query.where(PurchaseReceipt.receipt_date <= date_to)
     purchase = _scalar(session, purchase_query)
     labor = _labor(session, WorkLog.project_id, project.id, date_from, date_to)
     expenses = _expenses(session, ProjectExpense.project_id, project.id, date_from, date_to)
@@ -108,7 +118,9 @@ def project_cost_summary(
     installation = expenses.get(ExpenseCategory.INSTALLATION, 0)
     site = expenses.get(ExpenseCategory.SITE, 0)
     other = expenses.get(ExpenseCategory.OTHER, 0)
-    total = purchase + labor + shipping + installation + site + other
+    subcontract = expenses.get(ExpenseCategory.SUBCONTRACT, 0)
+    rework = expenses.get(ExpenseCategory.REWORK, 0)
+    total = purchase + labor + shipping + installation + site + other + subcontract + rework
     contract = project.contract_amount_kurus
     profit = contract - total if contract is not None else None
     margin = round(profit / contract * 100, 2) if profit is not None and contract else None
@@ -121,6 +133,8 @@ def project_cost_summary(
         installation_kurus=installation,
         site_kurus=site,
         other_kurus=other,
+        subcontract_kurus=subcontract,
+        rework_kurus=rework,
         total_cost_kurus=total,
         budget_kurus=project.budget_kurus,
         budget_variance_kurus=(project.budget_kurus - total)
@@ -236,6 +250,8 @@ def get_site_cost_summary(
     installation = expenses.get(ExpenseCategory.INSTALLATION, 0)
     site_cost = expenses.get(ExpenseCategory.SITE, 0)
     other = expenses.get(ExpenseCategory.OTHER, 0)
+    subcontract = expenses.get(ExpenseCategory.SUBCONTRACT, 0)
+    rework = expenses.get(ExpenseCategory.REWORK, 0)
     return SiteCostSummaryOut(
         site_id=site.id,
         project_id=site.project_id,
@@ -245,6 +261,10 @@ def get_site_cost_summary(
         installation_kurus=installation,
         site_kurus=site_cost,
         other_kurus=other,
-        total_cost_kurus=labor + shipping + installation + site_cost + other,
+        subcontract_kurus=subcontract,
+        rework_kurus=rework,
+        total_cost_kurus=(
+            labor + shipping + installation + site_cost + other + subcontract + rework
+        ),
         note="Satın almalar şantiyeye değil projeye bağlanır; şantiye toplamına dahil değildir.",
     )

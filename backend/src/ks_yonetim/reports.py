@@ -7,7 +7,7 @@ from decimal import Decimal
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from .models import Material, Payment, Purchase, RecordStatus, Supplier
+from .models import Material, Payment, Purchase, PurchaseReceipt, RecordStatus, Supplier
 from .schemas import (
     AgingBucket,
     AgingItem,
@@ -50,8 +50,16 @@ def debt_aging(session: Session, as_of: date) -> DebtAgingReport:
         select(Purchase, Supplier.name, Material.name)
         .join(Supplier, Supplier.id == Purchase.supplier_id)
         .join(Material, Material.id == Purchase.material_id)
-        .where(Purchase.status == RecordStatus.ACTIVE, Purchase.purchase_date <= as_of)
+        .where(Purchase.status == RecordStatus.ACTIVE)
     ).all()
+    received_as_of: dict[str, int] = {
+        purchase_id: int(amount)
+        for purchase_id, amount in session.execute(
+            select(PurchaseReceipt.purchase_id, func.sum(PurchaseReceipt.amount_kurus))
+            .where(PurchaseReceipt.status == RecordStatus.ACTIVE, PurchaseReceipt.receipt_date <= as_of)
+            .group_by(PurchaseReceipt.purchase_id)
+        )
+    }
 
     linked_paid: dict[str, int] = defaultdict(int)
     unlinked_by_supplier: dict[str, int] = defaultdict(int)
@@ -68,8 +76,12 @@ def debt_aging(session: Session, as_of: date) -> DebtAgingReport:
     by_supplier: dict[str, list[tuple[Purchase, str, int]]] = defaultdict(list)
     supplier_names: dict[str, str] = {}
     material_names: dict[str, str] = {}
+    # Planlı/siparişli veya kısmi teslimli satın almaya teslimden fazla yapılan bağlı ödeme avanstır.
     for purchase, supplier_name, material_name in purchases:
-        remaining = max(0, purchase.total_kurus - linked_paid.get(purchase.id, 0))
+        paid_here = linked_paid.get(purchase.id, 0)
+        received_here = received_as_of.get(purchase.id, 0)
+        remaining = max(0, received_here - paid_here)
+        unlinked_by_supplier[purchase.supplier_id] += max(0, paid_here - received_here)
         by_supplier[purchase.supplier_id].append((purchase, material_name, remaining))
         supplier_names[purchase.supplier_id] = supplier_name
         material_names[purchase.id] = material_name
@@ -171,27 +183,41 @@ def purchase_report(
     project_id: str | None,
 ) -> PurchaseReport:
     query = (
-        select(Purchase, Supplier.name, Material.name)
+        select(PurchaseReceipt, Purchase, Supplier.name, Material.name)
+        .join(Purchase, Purchase.id == PurchaseReceipt.purchase_id)
         .join(Supplier, Supplier.id == Purchase.supplier_id)
         .join(Material, Material.id == Purchase.material_id)
-        .where(Purchase.status == RecordStatus.ACTIVE)
+        .where(
+            Purchase.status == RecordStatus.ACTIVE,
+            PurchaseReceipt.status == RecordStatus.ACTIVE,
+        )
     )
     if date_from:
-        query = query.where(Purchase.purchase_date >= date_from)
+        query = query.where(PurchaseReceipt.receipt_date >= date_from)
     if date_to:
-        query = query.where(Purchase.purchase_date <= date_to)
+        query = query.where(PurchaseReceipt.receipt_date <= date_to)
     if supplier_id:
         query = query.where(Purchase.supplier_id == supplier_id)
     if project_id:
         query = query.where(Purchase.project_id == project_id)
-    rows = session.execute(query).all()
+    rows = session.execute(query.order_by(PurchaseReceipt.receipt_date, PurchaseReceipt.id)).all()
 
     suppliers: dict[str, SupplierReportRow] = {}
     materials: dict[tuple[str, str | None], MaterialReportRow] = {}
     months: dict[str, MonthReportRow] = {}
+    seen: set[tuple[str, str, object]] = set()
     purchase_total = 0
-    for purchase, supplier_name, material_name in rows:
-        purchase_total += purchase.total_kurus
+
+    def first_time(kind: str, key: object, purchase_id: str) -> bool:
+        marker = (kind, purchase_id, key)
+        if marker in seen:
+            return False
+        seen.add(marker)
+        return True
+
+    for receipt, purchase, supplier_name, material_name in rows:
+        amount = receipt.amount_kurus
+        purchase_total += amount
         srow = suppliers.setdefault(
             purchase.supplier_id,
             SupplierReportRow(
@@ -203,11 +229,13 @@ def purchase_report(
                 current_debt_kurus=0,
             ),
         )
-        srow.purchase_count += 1
-        srow.purchase_total_kurus += purchase.total_kurus
+        if first_time("supplier", purchase.supplier_id, purchase.id):
+            srow.purchase_count += 1
+        srow.purchase_total_kurus += amount
 
+        mkey = (purchase.material_id, purchase.unit)
         mrow = materials.setdefault(
-            (purchase.material_id, purchase.unit),
+            mkey,
             MaterialReportRow(
                 material_id=purchase.material_id,
                 material_name=material_name,
@@ -217,15 +245,17 @@ def purchase_report(
                 total_kurus=0,
             ),
         )
-        mrow.purchase_count += 1
-        mrow.total_kurus += purchase.total_kurus
-        if purchase.quantity is not None:
-            mrow.quantity = (mrow.quantity or Decimal(0)) + purchase.quantity
+        if first_time("material", mkey, purchase.id):
+            mrow.purchase_count += 1
+        mrow.total_kurus += amount
+        if receipt.quantity is not None:
+            mrow.quantity = (mrow.quantity or Decimal(0)) + receipt.quantity
 
-        key = purchase.purchase_date.strftime("%Y-%m")
+        key = receipt.receipt_date.strftime("%Y-%m")
         month = months.setdefault(key, MonthReportRow(month=key, purchase_count=0, total_kurus=0))
-        month.purchase_count += 1
-        month.total_kurus += purchase.total_kurus
+        if first_time("month", key, purchase.id):
+            month.purchase_count += 1
+        month.total_kurus += amount
 
     payment_query = select(Payment.supplier_id, func.sum(Payment.amount_kurus)).where(
         Payment.status == RecordStatus.ACTIVE
@@ -264,7 +294,7 @@ def purchase_report(
         ids = list(suppliers)
         bought = dict(
             session.execute(
-                select(Purchase.supplier_id, func.sum(Purchase.total_kurus))
+                select(Purchase.supplier_id, func.sum(Purchase.received_kurus))
                 .where(Purchase.status == RecordStatus.ACTIVE, Purchase.supplier_id.in_(ids))
                 .group_by(Purchase.supplier_id)
             ).all()

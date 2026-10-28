@@ -25,7 +25,9 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from . import clock
 from .api import ApiError, add_audit, require_sidecar_token
+from .attendance import load_attendance_settings, salary_due_date
 from .database import get_session
 from .employees import get_employee
 from .models import (
@@ -346,8 +348,19 @@ def refresh_balances(session: Session, period: PayrollPeriod) -> None:
 def post_ledger_on_finalize(
     session: Session, period: PayrollPeriod, entries: list[PayrollEntry], due: date | None
 ) -> None:
+    # Vade: istekte açık tarih > personel maaş günü istisnası > şirket varsayılanı > dönem bitişi.
+    attendance = load_attendance_settings(session)
+    people = {
+        e.id: e
+        for e in session.scalars(
+            select(Employee).where(Employee.id.in_([x.employee_id for x in entries] or [""]))
+        )
+    }
     for entry in entries:
         if entry.net_due_kurus > 0:
+            entry_due = due or salary_due_date(
+                people.get(entry.employee_id), period.period_end, attendance
+            )
             session.add(
                 EmployeeFinancialMovement(
                     employee_id=entry.employee_id,
@@ -356,7 +369,7 @@ def post_ledger_on_finalize(
                     movement_type="payroll_accrual",
                     direction=CO,
                     amount_kurus=entry.net_due_kurus,
-                    due_date=due or period.period_end,
+                    due_date=entry_due or period.period_end,
                     note=f"Maaş tahakkuku: {period.title}",
                     idempotency_key=f"payroll:{period.id}:{entry.employee_id}:accrual",
                     source="system",
@@ -720,7 +733,7 @@ def reverse_movement(
         payroll_period_id=original.payroll_period_id,
         project_id=original.project_id,
         site_id=original.site_id,
-        movement_date=payload.movement_date or date.today(),
+        movement_date=payload.movement_date or clock.business_today(),
         movement_type="reversal",
         direction=EO if original.direction == CO else CO,
         amount_kurus=original.amount_kurus,
@@ -783,7 +796,7 @@ def financial_summary(
     employee_id: str, as_of: date | None = None, session: Session = Depends(get_session)
 ):
     get_employee(session, employee_id)
-    day = as_of or date.today()
+    day = as_of or clock.business_today()
     return FinancialSummary(employee_id=employee_id, **employee_summary(session, employee_id, day))
 
 
@@ -876,7 +889,7 @@ def employee_debt_aging(
     employee_id: str, as_of: date | None = None, session: Session = Depends(get_session)
 ):
     get_employee(session, employee_id)
-    day = as_of or date.today()
+    day = as_of or clock.business_today()
     position = compute_positions(session, [employee_id], day)[employee_id]
     rows = aging_rows(position, day)
     return {"employee_id": employee_id, "as_of": day, **aging_summary(rows), "items": rows}

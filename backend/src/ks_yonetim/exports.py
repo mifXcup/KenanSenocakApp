@@ -33,9 +33,17 @@ class ReportTable:
     rows: list[dict[str, Any]]
     totals: dict[str, Any] = field(default_factory=dict)
     filters: dict[str, Any] = field(default_factory=dict)
+    # Açıklama satırları (yöntem/kapsam notları) ve yapılandırılmış uyarılar; JSON, XLSX ve PDF'te aynıdır.
+    notes: list[str] = field(default_factory=list)
+    warnings: list[dict] = field(default_factory=list)
+
+    def footnotes(self) -> list[str]:
+        return [*self.notes, *(w["message"] for w in self.warnings if w.get("message"))]
 
     def to_json(self) -> dict:
         return {
+            "notes": self.notes,
+            "warnings": self.warnings,
             "name": self.name,
             "title": self.title,
             "filters": {k: (v.isoformat() if isinstance(v, date) else v) for k, v in self.filters.items()},
@@ -79,6 +87,12 @@ def table_xlsx(table: ReportTable) -> bytes:
         )
         for cell in sheet[sheet.max_row]:
             cell.font = Font(bold=True)
+    footnotes = table.footnotes()
+    if footnotes:
+        sheet.append([])
+        for line in footnotes:
+            sheet.append([line])
+            sheet.cell(sheet.max_row, 1).font = Font(italic=True)
     for index, column in enumerate(table.columns, start=1):
         if column.kind == "money":
             for cells in sheet.iter_rows(min_row=2, min_col=index, max_col=index):
@@ -109,7 +123,7 @@ def table_pdf(table: ReportTable) -> bytes:
                 for index, c in enumerate(table.columns)
             ]
         )
-    return build_pdf(table.title, [c.label for c in table.columns], rows)
+    return build_pdf(table.title, [c.label for c in table.columns], rows, notes=table.footnotes())
 
 
 def file_response(content: bytes, media_type: str, file_name: str) -> Response:

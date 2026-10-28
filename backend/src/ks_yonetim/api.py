@@ -12,6 +12,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from . import clock
 from .backup import BackupError, backup_manager
 from .config import get_settings
 from .database import get_session
@@ -92,7 +93,8 @@ def error_payload(code: str, message: str, details: object | None = None) -> dic
 
 async def api_error_handler(_request: Request, exc: ApiError) -> JSONResponse:
     return JSONResponse(
-        status_code=exc.http_status, content=error_payload(exc.code, exc.message, exc.details)
+        status_code=exc.http_status,
+        content=jsonable_encoder(error_payload(exc.code, exc.message, exc.details)),
     )
 
 
@@ -215,7 +217,7 @@ def dashboard_summary(session: Session = Depends(get_session)) -> DashboardSumma
     )
     purchase_total = int(
         session.scalar(
-            select(func.coalesce(func.sum(Purchase.total_kurus), 0)).where(
+            select(func.coalesce(func.sum(Purchase.received_kurus), 0)).where(
                 Purchase.status == RecordStatus.ACTIVE
             )
         )
@@ -263,7 +265,7 @@ def purchases_report(
 def debt_aging_report(
     session: Session = Depends(get_session), as_of: date | None = None
 ) -> DebtAgingReport:
-    return debt_aging(session, as_of or date.today())
+    return debt_aging(session, as_of or clock.business_today())
 
 
 @router.post(
@@ -393,7 +395,15 @@ def list_materials(
     dependencies=[Depends(require_sidecar_token)],
 )
 def create_project(payload: ProjectCreate, session: Session = Depends(get_session)) -> Project:
-    project = Project(**payload.model_dump())
+    from .customers import find_or_create_customer, get_customer
+
+    data = payload.model_dump(exclude={"customer_id"})
+    if payload.customer_id:
+        customer = get_customer(session, payload.customer_id)
+        data["customer_name"] = customer.name
+    else:
+        customer = find_or_create_customer(session, payload.customer_name)
+    project = Project(**data, customer_id=customer.id)
     session.add(project)
     session.flush()
     add_audit(session, "project", project.id, "created")
@@ -410,8 +420,18 @@ def create_project(payload: ProjectCreate, session: Session = Depends(get_sessio
 def update_project(
     project_id: str, payload: ProjectUpdate, session: Session = Depends(get_session)
 ) -> Project:
+    from .customers import find_or_create_customer, get_customer
+
     project = require_active(session, Project, project_id, "Proje")
     changes = payload.model_dump(exclude_unset=True)
+    if changes.get("customer_id"):
+        customer = get_customer(session, changes["customer_id"])
+        changes["customer_name"] = customer.name
+    elif "customer_name" in changes:
+        customer = find_or_create_customer(session, changes["customer_name"])
+        changes["customer_id"] = customer.id
+    else:
+        changes.pop("customer_id", None)
     before = {key: getattr(project, key) for key in changes}
     for key, value in changes.items():
         setattr(project, key, value)
@@ -545,26 +565,26 @@ def create_purchase(
         paid = purchase_paid(session, existing.id)
         return to_purchase_detail(existing, paid)
     supplier = require_active(session, Supplier, payload.supplier_id, "Firma")
-    material = require_active(session, Material, payload.material_id, "Malzeme")
+    require_active(session, Material, payload.material_id, "Malzeme")
     if payload.project_id:
         require_active(session, Project, payload.project_id, "Proje")
     purchase_data = payload.model_dump(exclude={"paid_kurus", "total_kurus"})
-    purchase = Purchase(**purchase_data, total_kurus=payload.resolved_total_kurus)
+    total = payload.resolved_total_kurus
+    received = payload.lifecycle_state == "received"
+    purchase = Purchase(**purchase_data, total_kurus=total, received_kurus=0)
     session.add(purchase)
     session.flush()
-    session.add(
-        MaterialMovement(
-            material_id=material.id,
-            project_id=payload.project_id,
-            purchase_id=purchase.id,
-            movement_date=payload.purchase_date,
-            movement_type=MovementType.PURCHASE,
+    if received:
+        from .receipts import add_receipt
+
+        add_receipt(
+            session,
+            purchase,
+            receipt_date=payload.purchase_date,
+            amount_kurus=total,
             quantity=payload.quantity,
-            unit=payload.unit or material.default_unit,
-            amount_kurus=purchase.total_kurus,
-            confidence=material.tracking_mode,
+            idempotency_key=f"{payload.idempotency_key}:receipt",
         )
-    )
     if payload.paid_kurus:
         session.add(
             Payment(
@@ -705,7 +725,13 @@ def list_payments(
     dependencies=[Depends(require_sidecar_token)],
 )
 def reverse_payment(payment_id: str, session: Session = Depends(get_session)) -> Payment:
-    payment = require_active(session, Payment, payment_id, "Ödeme")
+    payment = session.get(Payment, payment_id)
+    if payment is None:
+        raise ApiError("not_found", "Ödeme bulunamadı.", 404)
+    if payment.status == RecordStatus.REVERSED:
+        raise ApiError("already_reversed", "Bu ödeme zaten terslenmiş.", 409)
+    if payment.status != RecordStatus.ACTIVE:
+        raise ApiError("not_found", "Ödeme bulunamadı.", 404)
     payment.status = RecordStatus.REVERSED
     payment.reversed_at = datetime.now(UTC)
     add_audit(session, "payment", payment.id, "reversed")
@@ -727,7 +753,12 @@ def cancel_purchase(purchase_id: str, session: Session = Depends(get_session)) -
             "Ödemesi bulunan satın alma önce ödeme ters kaydı yapılmadan iptal edilemez.",
             409,
         )
+    from .receipts import cancel_all_receipts
+
+    cancel_all_receipts(session, purchase, "Satın alma iptali")
     purchase.status = RecordStatus.CANCELLED
+    purchase.lifecycle_state = "cancelled"
+    purchase.received_kurus = 0
     movements = session.scalars(
         select(MaterialMovement).where(
             MaterialMovement.purchase_id == purchase.id,
@@ -774,7 +805,7 @@ def supplier_balance(supplier_id: str, session: Session = Depends(get_session)) 
     require_active(session, Supplier, supplier_id, "Firma")
     purchase_total = int(
         session.scalar(
-            select(func.coalesce(func.sum(Purchase.total_kurus), 0)).where(
+            select(func.coalesce(func.sum(Purchase.received_kurus), 0)).where(
                 Purchase.supplier_id == supplier_id, Purchase.status == RecordStatus.ACTIVE
             )
         )
