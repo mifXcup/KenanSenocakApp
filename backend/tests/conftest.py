@@ -20,10 +20,10 @@ from ks_yonetim.main import app
 def clean_database():
     with engine.begin() as connection:
         # Öz-referanslı ters kayıt bağlantısı drop_all sırasında FK ihlali yapmasın.
-        if inspect(connection).has_table("employee_financial_movements"):
-            connection.exec_driver_sql(
-                "UPDATE employee_financial_movements SET reversed_movement_id = NULL"
-            )
+        tables = inspect(connection)
+        for ledger in ("employee_financial_movements", "customer_financial_movements"):
+            if tables.has_table(ledger):
+                connection.exec_driver_sql(f"UPDATE {ledger} SET reversed_movement_id = NULL")
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     yield

@@ -78,6 +78,8 @@ class MaterialRead(OrmModel):
 class ProjectCreate(BaseModel):
     name: str = Field(min_length=2, max_length=180)
     customer_name: str = Field(min_length=2, max_length=180)
+    # Verilirse müşteri kartı esas alınır ve customer_name karttaki adla eşitlenir.
+    customer_id: str | None = None
     contract_amount_kurus: int | None = Field(default=None, ge=0)
     budget_kurus: int | None = Field(default=None, ge=0)
     stage: Literal["planning", "design", "approval", "production", "delivery", "installation", "completed"] = "planning"
@@ -91,6 +93,7 @@ class ProjectCreate(BaseModel):
 class ProjectUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=2, max_length=180)
     customer_name: str | None = Field(default=None, min_length=2, max_length=180)
+    customer_id: str | None = None
     contract_amount_kurus: int | None = Field(default=None, ge=0)
     budget_kurus: int | None = Field(default=None, ge=0)
     project_state: Literal["active", "completed", "cancelled"] | None = None
@@ -116,6 +119,7 @@ class ProjectRead(OrmModel):
     id: str
     name: str
     customer_name: str
+    customer_id: str | None = None
     contract_amount_kurus: int | None
     budget_kurus: int | None
     project_state: str
@@ -241,6 +245,8 @@ class PurchaseCreate(BaseModel):
     paid_kurus: int = Field(default=0, ge=0)
     description: str | None = Field(default=None, max_length=2000)
     idempotency_key: str = Field(min_length=8, max_length=80)
+    # Yeni kayıt varsayılanı received: eski istemciler davranışı değişmeden kullanır.
+    lifecycle_state: Literal["planned", "ordered", "received"] = "received"
 
     @model_validator(mode="after")
     def validate_amount(self) -> PurchaseCreate:
@@ -301,6 +307,8 @@ class PurchaseRead(OrmModel):
     total_kurus: int
     description: str | None
     status: RecordStatus
+    lifecycle_state: str = "received"
+    received_kurus: int = 0
 
 
 class PurchaseDetail(PurchaseRead):

@@ -8,6 +8,7 @@ from fastapi.exceptions import RequestValidationError
 from . import models  # noqa: F401
 from .api import ApiError, api_error_handler, router, validation_error_handler
 from .backup import BackupError, backup_manager
+from .customers import router as customers_router
 from .database import ensure_schema
 from .employees import router as employees_router
 from .finance import router as finance_router
@@ -16,8 +17,10 @@ from .operations import router as operations_router
 from .payroll import router as payroll_router
 from .pdf_exports import router as pdf_router
 from .project_costs import router as project_costs_router
+from .project_finance import router as project_finance_router
 from .spreadsheet_io import router as spreadsheet_router
 from .staff_reports import router as staff_reports_router
+from .supplier_ledger import router as supplier_ledger_router
 from .worklogs import router as worklogs_router
 
 
@@ -47,7 +50,10 @@ app.include_router(operations_router)
 app.include_router(worklogs_router)
 app.include_router(payroll_router)
 app.include_router(finance_router)
+app.include_router(customers_router)
 app.include_router(project_costs_router)
+app.include_router(project_finance_router)
+app.include_router(supplier_ledger_router)
 app.include_router(staff_reports_router)
 app.include_router(spreadsheet_router)
 app.include_router(ml_router)

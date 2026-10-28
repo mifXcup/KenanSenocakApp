@@ -58,11 +58,22 @@ class ExpenseCategory(str, enum.Enum):
     INSTALLATION = "installation"
     SITE = "site"
     OTHER = "other"
+    # Üye adları en uzun mevcut ad (INSTALLATION, 12) sınırını aşmaz: sütun genişliği değişmez.
+    SUBCONTRACT = "subcontract"
+    REWORK = "rework"
 
 
 class EmployeePaymentType(str, enum.Enum):
     ADVANCE = "advance"
     WAGE = "wage"
+
+
+def _default_received_kurus(context) -> int:
+    """Doğrudan eklenen satın almalar (içe aktarma, açılış borcu) teslim alınmış kabul edilir."""
+    params = context.get_current_parameters()
+    if params.get("lifecycle_state", "received") in ("planned", "ordered", "cancelled"):
+        return 0
+    return int(params["total_kurus"])
 
 
 class TimestampMixin:
@@ -103,6 +114,10 @@ class Project(TimestampMixin, Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     name: Mapped[str] = mapped_column(String(180), nullable=False, index=True)
     customer_name: Mapped[str] = mapped_column(String(180), nullable=False, index=True)
+    # customer_name orijinal metin olarak korunur; customer_id normalize edilmiş müşteri kartına bağlar.
+    # ALTER ile eklenen sütun-içi REFERENCES için SQLite yansıtması ON DELETE okuyamaz; bu yüzden
+    # varsayılan (NO ACTION) kullanılır. Müşteri kartları silinmez, arşivlenir.
+    customer_id: Mapped[str | None] = mapped_column(ForeignKey("customers.id"), index=True)
     contract_amount_kurus: Mapped[int | None] = mapped_column(Integer)
     budget_kurus: Mapped[int | None] = mapped_column(Integer)
     project_state: Mapped[str] = mapped_column(String(32), default="active", index=True)
@@ -201,6 +216,14 @@ class Purchase(TimestampMixin, Base):
     total_kurus: Mapped[int] = mapped_column(Integer, nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
     idempotency_key: Mapped[str] = mapped_column(String(80), nullable=False, unique=True)
+    # planned | ordered | partially_received | received | cancelled. Eski kayıtlar received sayılır.
+    lifecycle_state: Mapped[str] = mapped_column(
+        String(24), default="received", server_default="received"
+    )
+    # Teslim alınan (borç/maliyet doğuran) kısım; planlı/siparişte 0, teslimde total_kurus.
+    received_kurus: Mapped[int] = mapped_column(
+        Integer, default=_default_received_kurus, server_default="0"
+    )
     status: Mapped[RecordStatus] = mapped_column(
         Enum(RecordStatus), default=RecordStatus.ACTIVE, index=True
     )
@@ -531,3 +554,138 @@ class MlPrediction(Base):
     evaluated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     user_feedback: Mapped[str | None] = mapped_column(String(24))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class Customer(TimestampMixin, Base):
+    __tablename__ = "customers"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    name: Mapped[str] = mapped_column(String(180), nullable=False)
+    # Türkçe duyarlı, boşlukları sadeleştirilmiş ad; aynı müşteri için tek kart.
+    normalized_name: Mapped[str] = mapped_column(
+        String(180), nullable=False, unique=True, index=True
+    )
+    phone: Mapped[str | None] = mapped_column(String(40))
+    address: Mapped[str | None] = mapped_column(Text)
+    contact_person: Mapped[str | None] = mapped_column(String(180))
+    note: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[RecordStatus] = mapped_column(
+        Enum(RecordStatus), default=RecordStatus.ACTIVE, index=True
+    )
+
+
+class ReceivableSchedule(TimestampMixin, Base):
+    """Müşteriden beklenen tahsilat planı; defter hareketi değildir."""
+
+    __tablename__ = "receivable_schedules"
+    __table_args__ = (Index("ix_receivable_customer_due", "customer_id", "due_date"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    customer_id: Mapped[str] = mapped_column(
+        ForeignKey("customers.id", ondelete="RESTRICT"), nullable=False
+    )
+    project_id: Mapped[str | None] = mapped_column(
+        ForeignKey("projects.id", ondelete="RESTRICT"), index=True
+    )
+    title: Mapped[str] = mapped_column(String(180), nullable=False)
+    amount_kurus: Mapped[int] = mapped_column(Integer, nullable=False)
+    due_date: Mapped[date | None] = mapped_column(Date, index=True)
+    note: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[RecordStatus] = mapped_column(
+        Enum(RecordStatus), default=RecordStatus.ACTIVE, index=True
+    )
+
+
+class CustomerFinancialMovement(TimestampMixin, Base):
+    """Değişmez müşteri cari defteri; düzeltme yalnız ters kayıtla yapılır."""
+
+    __tablename__ = "customer_financial_movements"
+    __table_args__ = (
+        Index("ix_cust_movement_customer_date", "customer_id", "movement_date"),
+        Index("ix_cust_movement_project", "project_id", "movement_type"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    customer_id: Mapped[str] = mapped_column(
+        ForeignKey("customers.id", ondelete="RESTRICT"), nullable=False
+    )
+    project_id: Mapped[str | None] = mapped_column(ForeignKey("projects.id", ondelete="RESTRICT"))
+    receivable_schedule_id: Mapped[str | None] = mapped_column(
+        ForeignKey("receivable_schedules.id", ondelete="RESTRICT"), index=True
+    )
+    change_order_id: Mapped[str | None] = mapped_column(
+        ForeignKey("project_change_orders.id", ondelete="RESTRICT"), index=True
+    )
+    movement_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    movement_type: Mapped[str] = mapped_column(String(24), nullable=False, index=True)
+    direction: Mapped[str] = mapped_column(String(24), nullable=False)
+    amount_kurus: Mapped[int] = mapped_column(Integer, nullable=False)
+    note: Mapped[str | None] = mapped_column(Text)
+    idempotency_key: Mapped[str] = mapped_column(String(120), nullable=False, unique=True)
+    # Bir hareket yalnız bir kez terslenebilir: veritabanı düzeyinde benzersizdir.
+    reversed_movement_id: Mapped[str | None] = mapped_column(
+        ForeignKey("customer_financial_movements.id", ondelete="RESTRICT"), unique=True
+    )
+    source: Mapped[str] = mapped_column(String(16), default="manual", server_default="manual")
+    status: Mapped[RecordStatus] = mapped_column(
+        Enum(RecordStatus), default=RecordStatus.ACTIVE, index=True
+    )
+
+
+class ProjectBudgetLine(TimestampMixin, Base):
+    __tablename__ = "project_budget_lines"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    project_id: Mapped[str] = mapped_column(
+        ForeignKey("projects.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    category: Mapped[str] = mapped_column(String(24), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(180), nullable=False)
+    # amount_kurus güncel (revize) tutar; original_amount_kurus ilk bütçedir ve değişmez.
+    amount_kurus: Mapped[int] = mapped_column(Integer, nullable=False)
+    original_amount_kurus: Mapped[int] = mapped_column(Integer, nullable=False)
+    revision_no: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    note: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[RecordStatus] = mapped_column(
+        Enum(RecordStatus), default=RecordStatus.ACTIVE, index=True
+    )
+
+
+class ProjectBudgetRevision(Base):
+    __tablename__ = "project_budget_revisions"
+    __table_args__ = (
+        UniqueConstraint("budget_line_id", "revision_no", name="uq_budget_revision_no"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    budget_line_id: Mapped[str] = mapped_column(
+        ForeignKey("project_budget_lines.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    revision_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    previous_amount_kurus: Mapped[int | None] = mapped_column(Integer)
+    amount_kurus: Mapped[int] = mapped_column(Integer, nullable=False)
+    reason: Mapped[str | None] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ProjectChangeOrder(TimestampMixin, Base):
+    """Kapsam/bedel değişikliği; yalnız onaylı olanlar revize sözleşme bedeline girer."""
+
+    __tablename__ = "project_change_orders"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    project_id: Mapped[str] = mapped_column(
+        ForeignKey("projects.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    title: Mapped[str] = mapped_column(String(180), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    # Ek iş pozitif, kapsam daraltma negatif olabilir; sıfır anlamsızdır.
+    amount_kurus: Mapped[int] = mapped_column(Integer, nullable=False)
+    change_state: Mapped[str] = mapped_column(
+        String(16), default="draft", server_default="draft", index=True
+    )
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    decision_note: Mapped[str | None] = mapped_column(String(255))
+    status: Mapped[RecordStatus] = mapped_column(
+        Enum(RecordStatus), default=RecordStatus.ACTIVE, index=True
+    )

@@ -115,3 +115,32 @@ satın alma + iade + pozitif düzeltme - kullanım - fire
 Açılışta `ks_yonetim.migrate.upgrade_database` çalışır: eski (`alembic_version` olmayan) veritabanını tablo/sütun
 izinden tanıyıp damgalar, bekleyen revizyon varsa önce `pre_migration` yedeği alır, başarısızlıkta canlı
 veritabanını bu yedekten geri yükler.
+
+
+## P0 / WP-B1 tabloları
+
+- `customers`: müşteri kartı (`name`, `normalized_name` benzersiz, telefon, adres, ilgili kişi, not). Normalize ad,
+  boşlukları sadeleştirilmiş ve Türkçe `İ→i`, `I→ı` kuralıyla küçültülmüş addır. Silinmez, `archived` olur.
+- `projects.customer_id`: müşteri kartına bağ (boş olabilir). `customer_name` orijinal metin olarak değişmeden kalır.
+  Migration mevcut `customer_name` değerlerini normalize ederek kartlara bağlar (aynı normalize ad → tek kart, kart adı ilk
+  görülen yazımdır; kart kimliği normalize addan deterministik üretilir).
+- `receivable_schedules`: beklenen tahsilat planı (müşteri, isteğe bağlı proje, başlık, tutar, isteğe bağlı vade, durum
+  `active`/`cancelled`). Defter hareketi değildir.
+- `customer_financial_movements`: değişmez müşteri cari defteri (`movement_type`, `direction`, `amount_kurus` > 0,
+  `receivable_schedule_id`, `change_order_id`, `idempotency_key` benzersiz, `reversed_movement_id` benzersiz → bir hareket
+  yalnız bir kez terslenir, `source` `manual`/`system`). Projesiz açılış bakiyesi `project_id = NULL` ile yazılır.
+- `project_budget_lines`: kategori bazlı bütçe (`amount_kurus` güncel, `original_amount_kurus` ilk bütçe, `revision_no`).
+- `project_budget_revisions`: her tutar değişiminin değişmez kaydı (`previous_amount_kurus`, `amount_kurus`, `reason`);
+  (`budget_line_id`, `revision_no`) benzersiz. Satır oluşturulurken 1. revizyon yazılır.
+- `project_change_orders`: kapsam/bedel değişikliği (`amount_kurus` ≠ 0, negatif olabilir; `change_state`).
+- `purchases.lifecycle_state` (varsayılan `received`) ve `purchases.received_kurus`: borç ve maliyet `received_kurus`
+  üzerinden hesaplanır. Migration mevcut satırlarda `received_kurus = total_kurus`, iptal edilmişlerde `cancelled` / `0` yazar.
+- `project_expenses.category`: `subcontract` ve `rework` eklendi (sütun genişliği değişmez, ek migration gerekmez).
+
+### Alembic revizyonu
+
+9. `c1a7e9d2b3f4` customer ledger and project finance (head; `fb1db398215f` merge revizyonunu izler)
+
+Not: `projects.customer_id` SQLite'ta sütun içi `REFERENCES customers (id)` olarak eklenir (tablo yeniden kurulmaz,
+mevcut veri kopyalanmaz). SQLAlchemy'nin SQLite yansıtması sütun içi `ON DELETE` ifadesini okuyamadığından bu FK'de
+`ondelete` belirtilmez (varsayılan NO ACTION; FK pragma açıkken referanslı müşteri silinemez).

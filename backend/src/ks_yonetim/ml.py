@@ -72,9 +72,11 @@ OPENING_MATERIAL = "Açılış Bakiyesi"
 
 
 def usable_purchases():
-    """Açılış bakiyesi aktarımları ve iptal edilenler model verisine girmez."""
+    """Açılış bakiyesi aktarımları, iptal edilenler ve henüz teslim alınmamış (planlı/siparişli)
+    satın almalar model verisine girmez."""
     return (
         Purchase.status == RecordStatus.ACTIVE,
+        Purchase.lifecycle_state.in_(("received", "partially_received")),
         ~Purchase.idempotency_key.like(f"{OPENING_PREFIX}%"),
         Material.name != OPENING_MATERIAL,
     )

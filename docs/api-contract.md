@@ -229,3 +229,180 @@ Hesap kuralları: günlük = ücret × normal saat / 8; saatlik = ücret × saat
 aylık/gün sayısı (tam takvim ayı tam aylık ücret, ücretsiz izin/devamsızlık günü düşer, kaydı olmayan
 gün çalışıldı sayılır); fazla mesai = saatlik karşılık × saat × oran (varsayılan %150, dönemde
 değiştirilebilir). Yuvarlama bileşen başına `ROUND_HALF_UP`.
+
+
+## P0 / WP-B1 — Müşteri cari ve proje finansı
+
+Bu bölüm resmî muhasebe değildir: KDV, e-Fatura, vergi ve SGK yoktur. Tüm para alanları kuruş (integer),
+finansal kayıtlar silinmez (ters kayıt/iptal), her değişiklik audit log'a yazılır. Liste uçları `limit`/`offset`
+ile sayfalanır. `as_of` verilmezse sunucu tarihi kullanılır; tekrar edilebilir sonuç için her zaman gönderin.
+
+| Method | Yol | Amaç |
+| --- | --- | --- |
+| POST/GET | `/customers` | Müşteri kartı oluştur / listele (`q`, `include_archived`) |
+| GET/PATCH | `/customers/{id}` | Kart + `balance_kurus`, `project_count` / düzenle |
+| POST | `/customers/{id}/archive`, `/unarchive` | Arşivle / geri al (silinmez) |
+| GET | `/customers/{id}/statement` | Ekstre, yürüyen bakiye (`date_from`, `date_to`, `project_id`) |
+| GET | `/customers/{id}/aging` | Alacak yaşlandırma (`as_of`) |
+| POST/GET | `/receivable-schedules` | Alacak planı (`customer_id`, `project_id`, `state`, `as_of`) |
+| PATCH | `/receivable-schedules/{id}` | Başlık, tutar, vade, not (tutar tahsilatın altına inemez) |
+| POST | `/receivable-schedules/{id}/cancel` | Planı iptal et (bağlı hareket varsa reddedilir) |
+| POST/GET | `/customer-financial-movements` | Defter hareketi (`idempotency_key` zorunlu) / listele |
+| POST | `/customer-financial-movements/{id}/reverse` | Ters kayıt (gövde isteğe bağlı: `movement_date`, `note`) |
+| POST/GET | `/projects/{id}/budget-lines` | Bütçe satırı oluştur / listele (`include_cancelled`) |
+| PATCH | `/projects/{id}/budget-lines/{line_id}` | Düzenle; tutar değişimi `reason` ile revizyon üretir |
+| POST | `/projects/{id}/budget-lines/{line_id}/cancel` | Satırı iptal et |
+| GET | `/projects/{id}/budget-lines/{line_id}/revisions` | Revizyon geçmişi |
+| POST/GET | `/projects/{id}/change-orders` | Ek iş / kapsam değişikliği (`state` filtresi) |
+| PATCH | `/projects/{id}/change-orders/{order_id}` | Yalnız taslak düzenlenir |
+| POST | `/projects/{id}/change-orders/{order_id}/approve`, `/reject`, `/cancel` | Durum geçişi (gövde: `note`) |
+| POST | `/purchases/{id}/lifecycle` | Satın alma yaşam döngüsü geçişi |
+| GET | `/projects/{id}/profitability` | Taahhüt, gerçekleşen, kalan tahmin, tahmini bitiş maliyeti ve kâr |
+| GET | `/projects/{id}/cost-drilldown` | Her toplamın kaynak kayıt kimlikleri (`category`, `limit`) |
+| GET | `/suppliers/{id}/statement` | Tedarikçi ekstresi, yürüyen bakiye (`date_from`, `date_to`) |
+| GET | `/suppliers/{id}/aging` | Tedarikçi borç yaşlandırması (`as_of`) |
+
+Mevcut uçlardaki değişiklikler (geriye uyumlu): `POST /projects` ve `PATCH /projects/{id}` isteğe bağlı
+`customer_id` kabul eder; verilmezse `customer_name` normalize edilip müşteri kartı bulunur/oluşturulur. `Project`
+yanıtı `customer_id` taşır, `customer_name` orijinal metin olarak kalır. `POST /purchases` isteğe bağlı
+`lifecycle_state` (`planned`, `ordered`, `received`; varsayılan `received`) alır; `Purchase` yanıtları
+`lifecycle_state` ve `received_kurus` taşır. `POST /payments/{id}/reverse` zaten terslenmiş ödemede `404` yerine
+`409 already_reversed` döner. `GET /projects/{id}/cost-summary` ve `/sites/{id}/cost-summary` yanıtlarına
+`subcontract_kurus`, `rework_kurus` eklendi; `ProjectExpense.category` artık `subcontract` ve `rework` değerlerini de kabul eder.
+
+### Enumlar
+
+| Alan | Değerler |
+| --- | --- |
+| Müşteri hareketi `movement_type` | `accrual` (tahakkuk), `opening_balance`, `collection` (tahsilat), `refund` (iade), `correction`, `reversal` (yalnız sistem) |
+| `direction` | `receivable_increase` (tahakkuk, açılış, iade, artıran düzeltme), `receivable_decrease` (tahsilat, azaltan düzeltme). `correction` için zorunlu, diğerlerinde türden türetilir |
+| Alacak planı `payment_state` (türetilir) | `open`, `partial`, `paid`, `overdue`, `cancelled` |
+| Bütçe `category` | `material`, `labor`, `shipping`, `installation`, `subcontractor`, `site`, `waste_rework`, `other` |
+| Ek iş `change_state` | `draft`, `approved`, `rejected`, `cancelled` |
+| Satın alma `lifecycle_state` | `planned`, `ordered`, `partially_received`, `received`, `cancelled` |
+| Gider `category` | `shipping`, `installation`, `site`, `other`, `subcontract` (→ bütçe `subcontractor`), `rework` (→ `waste_rework`) |
+
+### Durum geçişleri
+
+- Ek iş: `draft → approved | rejected | cancelled`; `approved → cancelled` (müşteriye tahakkuk edilmişse önce tahakkuk
+  terslenmelidir). `rejected` ve `cancelled` terminaldir. Yalnız `approved` olanlar revize sözleşme bedeline girer.
+- Satın alma: `planned → ordered | partially_received | received | cancelled`; `ordered → partially_received | received |
+  cancelled`; `partially_received → partially_received (daha büyük tutar) | received | cancelled`; `received → cancelled`.
+  `cancelled` terminaldir. Geri dönüş (`received → ordered` gibi) yoktur. Ödemesi olan satın alma iptal edilemez.
+- Müşteri hareketi: değişmez; yalnız `reverse` ile terslenir. Bir hareket bir kez terslenir, ters kayıt hiç terslenmez.
+
+### Hesap kuralları
+
+- Müşteri bakiyesi = artıran hareketler − azaltan hareketler (ters satırlar zıt yönde yazıldığı için toplam doğrudur).
+- Tahsilat kalan alacağı (ve bağlı planın kalanını) aşamaz → `overcollection`. İade net tahsilatı aşamaz → `overrefund`.
+- Tahsilatın değil, bakiyeyi negatife düşürecek bir hareketin (ör. tahsil edilmiş tahakkukun) ters kaydı reddedilir →
+  `reversal_makes_credit`.
+- Ters kayıt tarihi varsayılan olarak orijinal hareketin tarihidir; dönem sonrası düzeltmede `movement_date` gönderin
+  (orijinalden önce olamaz → `invalid_reversal_date`).
+- Plana bağlı tahsilat o planı düşürür; bağlanmayan tahsilat yaşlandırmada en eski vadeden düşülür. Plana bağlanmamış
+  bakiye `unscheduled_kurus` ve `no_due_date` kovasında gösterilir; planlar bakiyeyi aşarsa `plan_excess_kurus` bilgi verir.
+- Yaşlandırma kovaları: `not_due`, `1_30`, `31_60`, `61_90`, `90_plus`, `no_due_date`.
+- Satın alma borcu ve proje maliyeti `received_kurus` üzerinden hesaplanır (planlı/siparişte 0). Eski kayıtlar `received`
+  kabul edilir. Teslim edilmemiş siparişe yapılan ön ödeme tedarikçi avansı (`credit_kurus`) olarak görünür.
+- Taahhüt = planlı/siparişli satın almanın tamamı + kısmi tesliminin teslim edilmemiş kısmı.
+- Kalan tahmin (kategori) = `max(kategori bütçesi − gerçekleşen − taahhüt, 0)`; kategori bütçesi yoksa 0. Satır bazlı bütçe
+  yoksa proje geneli `budget_kurus` esas alınır (`budget_source = project_budget`), tek kalemde tahmin edilir.
+- Tahmini bitiş maliyeti = gerçekleşen + taahhüt + kalan tahmin. Tahmini kâr = revize sözleşme − tahmini bitiş maliyeti;
+  marj = kâr / revize sözleşme × 100 (2 ondalık). Sözleşme yoksa kâr ve marj `null` döner.
+- Revize sözleşme = `contract_amount_kurus` + onaylı ek işler toplamı (sözleşme ve ek iş yoksa `null`).
+- `cost-drilldown` ve `profitability` aynı kaynak listesinden üretilir: her kategorinin `actual_sources` /
+  `commitment_sources` toplamı ilgili toplama eşittir. Kaynak türleri: `purchase`, `work_log`, `project_expense`.
+- Bilinen sınır: planlı/siparişli satın alma henüz malzeme hareketi yazmaz; hareket teslimde (`received`) oluşur. Kısmi
+  teslimde malzeme hareketi yazılmaz. Excel/PDF dışa aktarımlarında satın alma listeleri tüm aktif satırları gösterir (WP-B4'te
+  yaşam döngüsüne göre uyarlanacaktır).
+
+### Hata kodları (yeni)
+
+| Kod | HTTP | Anlam |
+| --- | --- | --- |
+| `duplicate_customer` | 409 | Normalize ad zaten kayıtlı |
+| `customer_archived` | 409 | Arşivli müşteriye yeni kayıt/düzenleme |
+| `already_archived`, `not_archived` | 409 | Arşiv durumu zaten istenen halde |
+| `project_customer_mismatch` | 409 | Proje başka müşteriye ait |
+| `schedule_customer_mismatch`, `schedule_project_mismatch` | 409 | Plan başka müşteri/projeye ait |
+| `schedule_cancelled` | 409 | İptal edilmiş plana işlem |
+| `schedule_has_movements` | 409 | Bağlı hareketi olan plan iptal edilemez |
+| `amount_below_collected` | 409 | Plan tutarı tahsilatın altına indirilemez |
+| `overcollection` | 409 | Fazla tahsilat (`details.remaining_kurus`) |
+| `overrefund` | 409 | Fazla iade (`details.refundable_kurus`) |
+| `idempotency_conflict` | 409 | Aynı anahtar farklı bir hareketle kullanılmış |
+| `already_reversed` | 409 | Hareket/ödeme zaten terslenmiş |
+| `cannot_reverse_reversal` | 409 | Ters kayıt tekrar terslenemez |
+| `reversal_makes_credit` | 409 | Tersleme bakiyeyi negatife düşürür |
+| `invalid_reversal_date` | 422 | Ters kayıt tarihi orijinalden önce |
+| `change_order_not_approved` | 409 | Onaysız ek iş tahakkuk edilemez |
+| `change_order_project_mismatch` | 409 | Tahakkuk ek işin projesine yazılmalıdır |
+| `change_order_locked` | 409 | Taslak olmayan ek iş düzenlenemez |
+| `change_order_has_accruals` | 409 | Tahakkuklu onaylı ek iş iptal edilemez |
+| `invalid_transition` | 409 | İzin verilmeyen durum geçişi (`details.from`, `details.to`) |
+| `budget_line_cancelled` | 409 | İptal edilmiş bütçe satırı düzenlenemez |
+| `invalid_received_amount` | 422 | Kısmi teslim tutarı geçersiz |
+| `invalid_range` | 422 | `date_from > date_to` |
+
+### Örnek yanıtlar
+
+`POST /customer-financial-movements` (`201`; aynı `idempotency_key` ve aynı gövdeyle tekrar aynı kaydı döner):
+
+```json
+{
+  "id": "uuid", "customer_id": "uuid", "project_id": "uuid", "receivable_schedule_id": null,
+  "change_order_id": null, "movement_date": "2026-01-20", "movement_type": "collection",
+  "direction": "receivable_decrease", "amount_kurus": 300000, "note": null,
+  "idempotency_key": "col-0001-aaaa", "reversed_movement_id": null, "source": "manual",
+  "status": "active", "is_voided": false
+}
+```
+
+`GET /customers/{id}/statement`:
+
+```json
+{
+  "customer_id": "uuid", "customer_name": "Kenan Yapı", "opening_balance_kurus": 0,
+  "total_increase_kurus": 1000000, "total_decrease_kurus": 300000, "closing_balance_kurus": 700000,
+  "rows": [
+    {"movement_id": "uuid", "movement_date": "2026-01-10", "movement_type": "accrual",
+     "direction": "receivable_increase", "increase_kurus": 1000000, "decrease_kurus": 0,
+     "balance_kurus": 1000000, "project_id": "uuid", "receivable_schedule_id": null,
+     "change_order_id": null, "reversed_movement_id": null, "is_voided": false, "note": null}
+  ]
+}
+```
+
+`GET /projects/{id}/profitability` (özet):
+
+```json
+{
+  "project_id": "uuid", "contract_amount_kurus": 3000000, "approved_change_orders_kurus": 200000,
+  "pending_change_orders_kurus": 0, "revised_contract_kurus": 3200000, "budget_source": "budget_lines",
+  "original_budget_kurus": 850000, "revised_budget_kurus": 850000, "actual_cost_kurus": 530000,
+  "commitment_kurus": 150000, "remaining_estimate_kurus": 250000,
+  "forecast_cost_at_completion_kurus": 930000, "budget_variance_kurus": -80000,
+  "current_profit_kurus": 2670000, "estimated_profit_kurus": 2270000, "estimated_margin_percent": 70.94,
+  "categories": [
+    {"category": "material", "budget_kurus": 500000, "original_budget_kurus": 500000,
+     "actual_kurus": 400000, "commitment_kurus": 150000, "remaining_estimate_kurus": 0,
+     "forecast_kurus": 550000, "variance_kurus": -50000, "budget_line_ids": ["uuid"]}
+  ]
+}
+```
+
+`GET /projects/{id}/cost-drilldown` (özet):
+
+```json
+{
+  "project_id": "uuid", "actual_total_kurus": 530000, "commitment_total_kurus": 150000,
+  "categories": [
+    {"category": "material", "actual_kurus": 400000, "commitment_kurus": 150000,
+     "actual_source_count": 1, "commitment_source_count": 1, "truncated": false,
+     "actual_sources": [{"source_type": "purchase", "source_id": "uuid", "date": "2026-02-01",
+                         "amount_kurus": 400000, "label": "MDF", "lifecycle_state": "received"}],
+     "commitment_sources": [{"source_type": "purchase", "source_id": "uuid", "date": "2026-02-01",
+                             "amount_kurus": 150000, "label": "MDF", "lifecycle_state": "planned"}]}
+  ]
+}
+```
