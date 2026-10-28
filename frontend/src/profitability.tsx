@@ -2,19 +2,13 @@ import { useMemo, useState, type CSSProperties } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { ArrowRight, ChartLineUp, WarningCircle } from '@phosphor-icons/react'
 import { apiRequest, formatMoney } from './lib/api'
-import type { Project, ProjectCostSummary } from './lib/types'
+import type { Project } from './lib/types'
 import { queryKeys, useCoreData } from './hooks/useCoreData'
 import { EmptyState, ErrorState, LoadingRows, PageHeader, StatusBanner } from './components/ui'
 import { profitTone } from './profitabilityUtils'
+import { ProfitabilityExtras } from './profitabilityExtras'
 
-const costLabels: Array<[keyof ProjectCostSummary, string]> = [
-  ['purchase_kurus', 'Malzeme ve satın alma'],
-  ['labor_accrual_kurus', 'İşçilik tahakkuku'],
-  ['shipping_kurus', 'Nakliye'],
-  ['installation_kurus', 'Montaj'],
-  ['site_kurus', 'Şantiye'],
-  ['other_kurus', 'Diğer giderler'],
-]
+interface Profitability { contract_amount_kurus: number | null; revised_contract_kurus: number | null; original_budget_kurus: number | null; revised_budget_kurus: number | null; actual_cost_kurus: number; commitment_kurus: number; remaining_estimate_kurus: number; forecast_cost_at_completion_kurus: number; estimated_profit_kurus: number | null; estimated_margin_percent: number | null; budget_variance_kurus: number | null; categories: Array<{ category: string; actual_kurus: number; commitment_kurus: number; remaining_estimate_kurus: number; forecast_kurus: number; forecast_source?: string }>; collections?: { net_collected_kurus: number; open_receivable_kurus: number; unlinked_customer_advance_kurus: number }; warnings?: Array<{ message: string }> }
 
 function ProjectSelector({ projects, selectedId, onSelect }: { projects: Project[]; selectedId: string; onSelect: (id: string) => void }) {
   return (
@@ -38,11 +32,11 @@ function SummaryMetric({ label, value, detail, tone = 'neutral' }: { label: stri
 function ProjectProfitDetail({ project }: { project: Project }) {
   const summary = useQuery({
     queryKey: queryKeys.profitability(project.id),
-    queryFn: () => apiRequest<ProjectCostSummary>(`/api/v1/projects/${project.id}/cost-summary`),
+    queryFn: () => apiRequest<Profitability>(`/api/v1/projects/${project.id}/profitability`),
   })
   const breakdown = useMemo(() => {
     if (!summary.data) return []
-    return costLabels.map(([key, label]) => ({ key, label, value: Number(summary.data?.[key] ?? 0) }))
+    return summary.data.categories.map((item) => ({ key: item.category, label: item.category, value: item.actual_kurus }))
   }, [summary.data])
 
   if (summary.isLoading) return <div className="profit-detail"><LoadingRows count={7} /></div>
@@ -59,14 +53,18 @@ function ProjectProfitDetail({ project }: { project: Project }) {
       </header>
       <div className="profit-metrics">
         <SummaryMetric label="Sözleşme" value={formatMoney(data.contract_amount_kurus)} detail="Mevcut proje bedeli" />
-        <SummaryMetric label="Gerçekleşen maliyet" value={formatMoney(data.total_cost_kurus)} detail="Satın alma + işçilik + gider" />
-        <SummaryMetric label="Tahmini kâr" value={formatMoney(data.estimated_profit_kurus)} detail={data.profit_margin_percent == null ? 'Marj hesaplanamadı' : `%${data.profit_margin_percent.toLocaleString('tr-TR')} marj`} tone={profitTone(data.estimated_profit_kurus)} />
+        <SummaryMetric label="Gerçekleşen maliyet" value={formatMoney(data.actual_cost_kurus)} detail="Teslim + işçilik + gider" />
+        <SummaryMetric label="Taahhüt" value={formatMoney(data.commitment_kurus)} detail="Bekleyen sipariş" />
+        <SummaryMetric label="Kalan tahmin" value={formatMoney(data.remaining_estimate_kurus)} detail="Otomatik / manuel" />
+        <SummaryMetric label="Tahmini bitiş maliyeti" value={formatMoney(data.forecast_cost_at_completion_kurus)} detail="Gerçekleşen + taahhüt + kalan" />
+        <SummaryMetric label="Tahmini kâr" value={formatMoney(data.estimated_profit_kurus)} detail={data.estimated_margin_percent == null ? 'Marj hesaplanamadı' : `%${data.estimated_margin_percent.toLocaleString('tr-TR')} marj`} tone={profitTone(data.estimated_profit_kurus)} />
         <SummaryMetric label="Bütçe farkı" value={formatMoney(data.budget_variance_kurus)} detail="Pozitif tutar kalan bütçedir" tone={profitTone(data.budget_variance_kurus)} />
       </div>
-      <StatusBanner>Bu ilk sürüm yalnızca gerçekleşen maliyetleri gösterir. Sipariş taahhüdü, kalan maliyet tahmini ve müşteri tahsilatları Claude backend paketiyle eklenecek.</StatusBanner>
+      <StatusBanner>Revize sözleşme {formatMoney(data.revised_contract_kurus)} · Net tahsilat {formatMoney(data.collections?.net_collected_kurus)} · Açık alacak {formatMoney(data.collections?.open_receivable_kurus)}</StatusBanner>
+      {data.warnings?.map((warning, index) => <p role="alert" key={index}>{warning.message}</p>)}
       <div className="profit-grid">
         <section className="panel profit-breakdown">
-          <header><div><h3>Maliyet dağılımı</h3><p>Bugüne kadar projeye bağlanan giderler</p></div><strong>{formatMoney(data.total_cost_kurus)}</strong></header>
+          <header><div><h3>Maliyet dağılımı</h3><p>Bugüne kadar projeye bağlanan giderler</p></div><strong>{formatMoney(data.actual_cost_kurus)}</strong></header>
           <div>{breakdown.map((item) => (
             <div className="cost-line" key={item.key}>
               <span><strong>{item.label}</strong><small>{formatMoney(item.value)}</small></span>
@@ -77,11 +75,12 @@ function ProjectProfitDetail({ project }: { project: Project }) {
         <section className="panel profit-health">
           <header><h3>Kontrol noktaları</h3></header>
           <div className="profit-check"><span className={data.contract_amount_kurus == null ? 'check-dot check-dot--warn' : 'check-dot'} /><span><strong>Sözleşme bedeli</strong><small>{data.contract_amount_kurus == null ? 'Girilmeden kâr hesaplanamaz' : 'Kayıtlı'}</small></span></div>
-          <div className="profit-check"><span className={data.budget_kurus == null ? 'check-dot check-dot--warn' : 'check-dot'} /><span><strong>Proje bütçesi</strong><small>{data.budget_kurus == null ? 'Sapma takibi için girilmeli' : formatMoney(data.budget_kurus)}</small></span></div>
+          <div className="profit-check"><span className={data.revised_budget_kurus == null ? 'check-dot check-dot--warn' : 'check-dot'} /><span><strong>Revize bütçe</strong><small>{data.revised_budget_kurus == null ? 'Sapma takibi için girilmeli' : formatMoney(data.revised_budget_kurus)}</small></span></div>
           <div className="profit-check"><span className={data.budget_variance_kurus != null && data.budget_variance_kurus < 0 ? 'check-dot check-dot--bad' : 'check-dot'} /><span><strong>Bütçe durumu</strong><small>{data.budget_variance_kurus == null ? 'Hesaplanamadı' : data.budget_variance_kurus < 0 ? `${formatMoney(Math.abs(data.budget_variance_kurus))} aşım` : `${formatMoney(data.budget_variance_kurus)} alan var`}</small></span></div>
-          {data.estimated_profit_kurus != null && data.estimated_profit_kurus < 0 && <div className="profit-alert"><WarningCircle size={18} /><span><strong>Zarar riski</strong><small>Gerçekleşen maliyet sözleşme bedelini aştı.</small></span></div>}
+          {data.estimated_profit_kurus != null && data.estimated_profit_kurus < 0 && <div className="profit-alert"><WarningCircle size={18} /><span><strong>Zarar riski</strong><small>Tahmini bitiş maliyeti sözleşme bedelini aşıyor.</small></span></div>}
         </section>
       </div>
+      <ProfitabilityExtras projectId={project.id} />
     </section>
   )
 }
