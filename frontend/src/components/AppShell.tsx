@@ -1,43 +1,9 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { NavLink, useLocation, useNavigate } from 'react-router-dom'
-import {
-  Archive,
-  Buildings,
-  ChartLineUp,
-  ClipboardText,
-  GearSix,
-  House,
-  MagnifyingGlass,
-  Package,
-  Plus,
-  Receipt,
-  Sparkle,
-  Toolbox,
-  UsersThree,
-} from '@phosphor-icons/react'
+import { Archive, MagnifyingGlass, Plus } from '@phosphor-icons/react'
 import { Button } from './ui'
 import { useCoreData } from '../hooks/useCoreData'
-
-const navigation = [
-  { label: 'Operasyon', items: [
-    { to: '/', label: 'Genel Bakış', icon: House },
-    { to: '/is-takibi', label: 'İş Takibi', icon: ClipboardText },
-    { to: '/projeler', label: 'Proje Takip', icon: Buildings },
-    { to: '/satin-almalar', label: 'Satın Almalar', icon: Receipt },
-  ] },
-  { label: 'Kayıtlar', items: [
-    { to: '/firmalar', label: 'Firmalar', icon: UsersThree },
-    { to: '/malzemeler', label: 'Malzemeler', icon: Package },
-    { to: '/personel', label: 'Personel ve Şantiye', icon: Toolbox },
-  ] },
-  { label: 'Analiz', items: [
-    { to: '/raporlar', label: 'Raporlar', icon: ChartLineUp },
-    { to: '/akilli-ongoruler', label: 'Akıllı Öngörüler', icon: Sparkle },
-  ] },
-  { label: 'Sistem', items: [
-    { to: '/ayarlar', label: 'Ayarlar', icon: GearSix },
-  ] },
-]
+import { navigationGroups, navigationLabel } from '../appNavigation'
 
 export function AppShell({ children, onQuickPurchase }: { children: ReactNode; onQuickPurchase: () => void }) {
   const [searchOpen, setSearchOpen] = useState(false)
@@ -74,16 +40,16 @@ export function AppShell({ children, onQuickPurchase }: { children: ReactNode; o
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [navigate, onQuickPurchase])
 
-  const current = navigation.flatMap((group) => group.items).find((item) => item.to === location.pathname)?.label ?? 'Kenan Şenocak Yönetim'
+  const current = navigationLabel(location.pathname)
 
   return (
     <div className="app-shell">
       <aside className="sidebar">
         <div className="brand"><span className="brand__mark">KŞ</span><span><strong>Kenan Şenocak</strong><small>Yönetim</small></span></div>
         <nav aria-label="Ana navigasyon">
-          {navigation.map((group) => <div className="nav-group" key={group.label}><span className="nav-group__label">{group.label}</span>{group.items.map(({ to, label, icon: Icon }) => (
+          {navigationGroups.map((group) => <div className="nav-group" key={group.label}><span className="nav-group__label">{group.label}</span>{group.items.map(({ to, label, icon: Icon, contractPending }) => (
               <NavLink key={to} to={to} end={to === '/'} className={({ isActive }) => `nav-item ${isActive ? 'nav-item--active' : ''}`} title={label}>
-                <Icon size={19} weight="regular" aria-hidden="true" /><span>{label}</span>
+                <Icon size={19} weight="regular" aria-hidden="true" /><span>{label}</span>{contractPending && <i className="nav-item__pending" title="Backend sözleşmesi hazırlanıyor" />}
               </NavLink>
             ))}</div>)}
         </nav>
@@ -102,7 +68,7 @@ export function AppShell({ children, onQuickPurchase }: { children: ReactNode; o
       {searchOpen && (
         <div className="command-layer" onMouseDown={(event) => event.target === event.currentTarget && closeSearch()}>
           <section className="command" role="dialog" aria-modal="true" aria-label="Global arama">
-            <MagnifyingGlass size={20} /><input autoFocus value={searchValue} onChange={(event) => setSearchValue(event.target.value)} placeholder="Firma, proje veya malzeme ara" onKeyDown={(event) => event.key === 'Escape' && closeSearch()} />
+            <MagnifyingGlass size={20} /><input autoFocus value={searchValue} onChange={(event) => setSearchValue(event.target.value)} placeholder="Tedarikçi, proje veya malzeme ara" onKeyDown={(event) => event.key === 'Escape' && closeSearch()} />
             <kbd>Esc</kbd>
             <div className="search-results">
               {searchValue.trim().length < 2 ? <p>Aramak için en az iki karakter yazın.</p> : searchResults.length === 0 ? <p>Eşleşen kayıt bulunamadı.</p> : searchResults.map((result) => <button key={`${result.type}-${result.id}`} onClick={() => openResult(result.route)}><span className="search-results__type">{result.type}</span><strong>{result.title}</strong><small>{result.detail}</small></button>)}
