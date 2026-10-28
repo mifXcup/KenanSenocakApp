@@ -12,7 +12,7 @@
     "build:ui": "npm --prefix frontend run build",
     "build": "npm run build:icon && npm run build:backend && npm run build:ui && electron-builder --dir",
     "dist": "npm run build:icon && npm run build:backend && npm run build:ui && electron-builder --win nsis",
-    "test": "npm --prefix frontend run test",
+    "test": "npm --prefix frontend run test && node --test desktop/main.test.cjs",
     "lint": "npm --prefix frontend run lint"
   },
   "devDependencies": {

@@ -40,7 +40,7 @@ function isTrustedRendererUrl(frameUrl) {
     try { return new URL(frameUrl).origin === new URL(process.env.VITE_DEV_SERVER_URL).origin } catch { return false }
   }
   const rendererRoot = pathToFileURL(path.join(__dirname, '..', 'frontend', 'dist')).href
-  return frameUrl.startsWith(rendererRoot)
+  return frameUrl.startsWith(`${rendererRoot}/`)
 }
 
 function isTrustedSender(event) {
@@ -154,6 +154,19 @@ ipcMain.handle('api:download', async (event, request) => {
       return { status: 'error', message: payload?.error?.message || `Rapor alınamadı (${response.status}).` }
     }
     const contentType = response.headers.get('content-type')?.split(';')[0]?.trim()
+    const isTemplate = /\/import-template$|\/imports\/templates\//.test(request.path)
+    if (isTemplate) {
+      if (contentType !== 'application/json') return { status: 'error', message: 'Şablon yanıtı geçersiz.' }
+      const payload = await response.json()
+      if (payload.mime_type !== 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' || typeof payload.content_base64 !== 'string' || payload.content_base64.length > 12_000_000) return { status: 'error', message: 'Şablon içeriği geçersiz.' }
+      const bytes = Buffer.from(payload.content_base64, 'base64')
+      if (bytes.subarray(0, 2).toString() !== 'PK') return { status: 'error', message: 'Excel şablonu geçersiz.' }
+      const choice = await dialog.showSaveDialog(mainWindow, { defaultPath: `${filename}.xlsx`, filters: [{ name: 'XLSX', extensions: ['xlsx'] }] })
+      if (choice.canceled || !choice.filePath) return { status: 'cancelled' }
+      if (path.extname(choice.filePath).toLowerCase() !== '.xlsx') return { status: 'error', message: 'Excel uzantısı geçersiz.' }
+      await fs.writeFile(choice.filePath, bytes)
+      return { status: 'saved' }
+    }
     const expected = extension === 'pdf' ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     if (contentType !== expected) return { status: 'error', message: 'Rapor dosya türü beklenen biçimde değil.' }
     const bytes = Buffer.from(await response.arrayBuffer())
@@ -161,9 +174,23 @@ ipcMain.handle('api:download', async (event, request) => {
     if (extension === 'xlsx' && bytes.subarray(0, 2).toString() !== 'PK') return { status: 'error', message: 'Excel içeriği geçersiz.' }
     const choice = await dialog.showSaveDialog(mainWindow, { defaultPath: `${filename}.${extension}`, filters: [{ name: extension.toUpperCase(), extensions: [extension] }] })
     if (choice.canceled || !choice.filePath) return { status: 'cancelled' }
+    if (path.extname(choice.filePath).toLowerCase() !== `.${extension}`) return { status: 'error', message: 'Dosya uzantısı geçersiz.' }
     await fs.writeFile(choice.filePath, bytes, { flag: 'w' })
     return { status: 'saved' }
   } catch (error) { return { status: 'error', message: `Dosya kaydedilemedi: ${String(error)}` } }
+})
+
+ipcMain.handle('api:read-spreadsheet', async (event) => {
+  if (!isTrustedSender(event)) throw new Error('Güvenilmeyen renderer isteği reddedildi.')
+  const choice = await dialog.showOpenDialog(mainWindow, { properties: ['openFile'], filters: [{ name: 'XLSX', extensions: ['xlsx'] }] })
+  if (choice.canceled || choice.filePaths.length !== 1) return { status: 'cancelled' }
+  const filePath = choice.filePaths[0]
+  if (path.extname(filePath).toLowerCase() !== '.xlsx') return { status: 'error', message: 'Yalnız XLSX dosyası seçilebilir.' }
+  const stat = await fs.stat(filePath)
+  if (stat.size > 8 * 1024 * 1024) return { status: 'error', message: 'Dosya 8 MB sınırını aşıyor.' }
+  const bytes = await fs.readFile(filePath)
+  if (bytes.subarray(0, 2).toString() !== 'PK') return { status: 'error', message: 'Geçersiz Excel dosyası.' }
+  return { status: 'selected', file_name: path.basename(filePath), content_base64: bytes.toString('base64') }
 })
 
 ipcMain.handle('api:request', async (event, request) => {
