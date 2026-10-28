@@ -10,6 +10,7 @@ interface Window {
   ksDesktop?: {
     api: {
       request: <T>(request: { path: string; method?: string; body?: unknown }) => Promise<DesktopApiResponse<T>>
+      downloadReport: (request: { path: string; filename?: string }) => Promise<{ status: 'saved' | 'cancelled' | 'error'; message?: string }>
     }
     app: {
       getInfo: () => Promise<import('./lib/types').DesktopInfo>
