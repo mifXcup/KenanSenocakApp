@@ -7,7 +7,8 @@ import { PersonnelPage } from './operations'
 import { InsightsPage } from './insights'
 import { ProjectCenterPage } from './projectCenter'
 import { MiniProjectBar } from './projectBar'
-import { AttendanceFoundationPage, CalendarFoundationPage, CustomersFoundationPage, PayrollFoundationPage, ProfitabilityFoundationPage } from './foundationPages'
+import { AttendanceFoundationPage, CalendarFoundationPage, CustomersFoundationPage, PayrollFoundationPage } from './foundationPages'
+import { ProfitabilityPage } from './profitability'
 
 function AppContent() {
   const [purchaseOpen, setPurchaseOpen] = useState(false)
@@ -27,7 +28,7 @@ function AppContent() {
         <Route path="/is-takibi" element={<Navigate to="/projeler" replace />} />
         <Route path="/takvim" element={<CalendarFoundationPage />} />
         <Route path="/projeler" element={<ProjectCenterPage />} />
-        <Route path="/proje-karliligi" element={<ProfitabilityFoundationPage />} />
+        <Route path="/proje-karliligi" element={<ProfitabilityPage />} />
         <Route path="/musteriler" element={<CustomersFoundationPage />} />
         <Route path="/satin-almalar" element={<PurchasesPage onNewPurchase={openPurchase} />} />
         <Route path="/firmalar" element={<SuppliersPage />} />

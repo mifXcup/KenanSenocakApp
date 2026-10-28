@@ -49,6 +49,23 @@ export interface ProjectMeasurement { id: string; project_id: string; space_name
 export interface ProjectVisit { id: string; project_id: string; visit_date: string; purpose: string; visit_state: 'planned' | 'completed' | 'cancelled'; note: string | null; created_at: string }
 export interface ProjectHub { project: Project; notes: ProjectNote[]; tasks: ProjectTask[]; colors: ProjectColor[]; measurements: ProjectMeasurement[]; visits: ProjectVisit[] }
 
+export interface ProjectCostSummary {
+  project_id: string
+  purchase_kurus: number
+  labor_accrual_kurus: number
+  labor_kurus: number
+  shipping_kurus: number
+  installation_kurus: number
+  site_kurus: number
+  other_kurus: number
+  total_cost_kurus: number
+  budget_kurus: number | null
+  budget_variance_kurus: number | null
+  contract_amount_kurus: number | null
+  estimated_profit_kurus: number | null
+  profit_margin_percent: number | null
+}
+
 export interface Purchase {
   id: string
   supplier_id: string
