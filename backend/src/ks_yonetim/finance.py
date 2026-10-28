@@ -26,6 +26,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .api import ApiError, add_audit, require_sidecar_token
+from .attendance import load_attendance_settings, salary_due_date
 from .database import get_session
 from .employees import get_employee
 from .models import (
@@ -346,8 +347,19 @@ def refresh_balances(session: Session, period: PayrollPeriod) -> None:
 def post_ledger_on_finalize(
     session: Session, period: PayrollPeriod, entries: list[PayrollEntry], due: date | None
 ) -> None:
+    # Vade: istekte açık tarih > personel maaş günü istisnası > şirket varsayılanı > dönem bitişi.
+    attendance = load_attendance_settings(session)
+    people = {
+        e.id: e
+        for e in session.scalars(
+            select(Employee).where(Employee.id.in_([x.employee_id for x in entries] or [""]))
+        )
+    }
     for entry in entries:
         if entry.net_due_kurus > 0:
+            entry_due = due or salary_due_date(
+                people.get(entry.employee_id), period.period_end, attendance
+            )
             session.add(
                 EmployeeFinancialMovement(
                     employee_id=entry.employee_id,
@@ -356,7 +368,7 @@ def post_ledger_on_finalize(
                     movement_type="payroll_accrual",
                     direction=CO,
                     amount_kurus=entry.net_due_kurus,
-                    due_date=due or period.period_end,
+                    due_date=entry_due or period.period_end,
                     note=f"Maaş tahakkuku: {period.title}",
                     idempotency_key=f"payroll:{period.id}:{entry.employee_id}:accrual",
                     source="system",

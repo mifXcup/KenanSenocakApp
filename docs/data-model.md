@@ -171,3 +171,32 @@ mevcut veri kopyalanmaz). SQLAlchemy'nin SQLite yansıtması sütun içi `ON DEL
 
 10. `d2b8f6a1c4e7` allocations, receipts, forecasts (head). `material_movements.purchase_receipt_id` sütun içi
 `REFERENCES purchase_receipts (id)` olarak eklenir (tablo yeniden kurulmaz); B1'deki `ON DELETE` notu burada da geçerlidir.
+
+
+## P0 / WP-B2 tabloları
+
+- `employees` (yeni sütunlar): `email`, `address`, `skill`, `emergency_contact_name`, `emergency_contact_phone`,
+  `emergency_contact_relation`, `payment_method`, `salary_day` (boşsa şirket varsayılanı).
+- `work_logs` (yeni sütunlar): `leave_request_id` (izin talebine bağ), `leave_hours`, `source` (`manual`/`leave`).
+  **Kısmi benzersiz indeks** `uq_work_log_employee_day_active (employee_id, work_date) WHERE status = 'ACTIVE'`:
+  personel+gün için tek aktif puantaj veritabanı düzeyinde garanti edilir.
+- `leave_types`: izin türü (`code` benzersiz, `work_status`, `deducts_entitlement`, `is_system`). Migration 5 sistem türünü
+  yazar (`annual`, `sick`, `other_paid`, `unpaid`, `excused`); kimlikleri deterministiktir.
+- `leave_requests`: talep (`employee_id`, `leave_type_id`, `start_date`, `end_date`, `day_part`, `hours_per_day`, `total_hours`,
+  `request_state`, `decision_note`, `decided_at`, `idempotency_key` benzersiz).
+- `leave_ledger_entries`: hak defteri; `quantity_hours` işaretli, `entry_date`, `valid_from`/`valid_to`, `leave_request_id`,
+  `reversed_entry_id` benzersiz (bir kayıt bir kez terslenir), `source` (`manual`/`system`), `idempotency_key` benzersiz.
+  Silinmez; `use` ve `reversal` kayıtları sistemdir.
+- `public_holidays`: `holiday_date`, `name`, `is_half_day`; aktif tarih için kısmi benzersiz indeks
+  `uq_public_holiday_date_active`.
+- `weekly_work_plans`: `employee_id` (boş = şirket planı), `effective_from`, `effective_to`, `workdays` (7 karakter, Pzt..Paz,
+  `1` = çalışma günü).
+- `work_log_duplicate_reports`: migration'ın çözdüğü mükerrer puantaj raporu (kalıcı denetim izi). Hiçbir puantaj
+  silinmez; kaybeden kayıt `CANCELLED` olur.
+- `app_settings` yeni anahtarlar: `attendance_enforcement_start_date`, `default_salary_day`, `allow_negative_leave_balance`.
+
+### Alembic revizyonu
+
+11. `e3c9a7b5d1f2` leave attendance and unique work log (head). `work_logs.leave_request_id` sütun içi
+`REFERENCES leave_requests (id)` olarak eklenir (B1'deki `ON DELETE` notu geçerlidir). Mükerrer çözümü benzersiz indeks
+oluşturulmadan önce aynı transaction'da yapılır; yükseltme öncesi otomatik `pre_migration` yedeği alınır.

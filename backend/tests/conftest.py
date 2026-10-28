@@ -23,9 +23,13 @@ def clean_database():
     with engine.begin() as connection:
         # Öz-referanslı ters kayıt bağlantısı drop_all sırasında FK ihlali yapmasın.
         tables = inspect(connection)
-        for ledger in ("employee_financial_movements", "customer_financial_movements"):
+        for ledger, column in (
+            ("employee_financial_movements", "reversed_movement_id"),
+            ("customer_financial_movements", "reversed_movement_id"),
+            ("leave_ledger_entries", "reversed_entry_id"),
+        ):
             if tables.has_table(ledger):
-                connection.exec_driver_sql(f"UPDATE {ledger} SET reversed_movement_id = NULL")
+                connection.exec_driver_sql(f"UPDATE {ledger} SET {column} = NULL")
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     yield

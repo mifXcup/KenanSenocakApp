@@ -524,6 +524,14 @@ class EmployeeCreate(BaseModel):
     iban: str | None = Field(default=None, max_length=48)
     payment_note: str | None = Field(default=None, max_length=2000)
     note: str | None = Field(default=None, max_length=2000)
+    email: str | None = Field(default=None, max_length=180)
+    address: str | None = Field(default=None, max_length=2000)
+    skill: str | None = Field(default=None, max_length=120)
+    emergency_contact_name: str | None = Field(default=None, max_length=180)
+    emergency_contact_phone: str | None = Field(default=None, max_length=40)
+    emergency_contact_relation: str | None = Field(default=None, max_length=60)
+    payment_method: PaymentMethod | None = None
+    salary_day: int | None = Field(default=None, ge=1, le=31)
 
     @model_validator(mode="after")
     def validate_employee(self) -> EmployeeCreate:
@@ -556,6 +564,14 @@ class EmployeeUpdate(BaseModel):
     iban: str | None = Field(default=None, max_length=48)
     payment_note: str | None = Field(default=None, max_length=2000)
     note: str | None = Field(default=None, max_length=2000)
+    email: str | None = Field(default=None, max_length=180)
+    address: str | None = Field(default=None, max_length=2000)
+    skill: str | None = Field(default=None, max_length=120)
+    emergency_contact_name: str | None = Field(default=None, max_length=180)
+    emergency_contact_phone: str | None = Field(default=None, max_length=40)
+    emergency_contact_relation: str | None = Field(default=None, max_length=60)
+    payment_method: PaymentMethod | None = None
+    salary_day: int | None = Field(default=None, ge=1, le=31)
 
     @model_validator(mode="after")
     def validate_patch(self) -> EmployeeUpdate:
@@ -583,6 +599,14 @@ class EmployeeRead(OrmModel):
     iban: str | None
     payment_note: str | None
     note: str | None
+    email: str | None = None
+    address: str | None = None
+    skill: str | None = None
+    emergency_contact_name: str | None = None
+    emergency_contact_phone: str | None = None
+    emergency_contact_relation: str | None = None
+    payment_method: str | None = None
+    salary_day: int | None = None
     status: RecordStatus
 
 
@@ -635,7 +659,18 @@ class ImportIssue(BaseModel):
     message: str
 
 
-WorkStatus = Literal["worked", "half_day", "overtime", "paid_leave", "unpaid_leave", "absent"]
+# Yıllık/raporlu/mazeret izin durumları yalnız izin talebi onayıyla üretilir; elle girilemez.
+WorkStatus = Literal[
+    "worked",
+    "half_day",
+    "overtime",
+    "paid_leave",
+    "unpaid_leave",
+    "absent",
+    "public_holiday",
+    "weekly_rest",
+]
+PaymentMethod = Literal["cash", "bank_transfer", "other"]
 
 
 class WorkLogCreate(BaseModel):
@@ -701,6 +736,9 @@ class WorkLogRead(OrmModel):
     amount_kurus: int
     calculated_amount_kurus: int | None
     manual_amount_kurus: int | None
+    leave_request_id: str | None = None
+    leave_hours: Decimal | None = None
+    source: str = "manual"
     note: str | None
     status: RecordStatus
 

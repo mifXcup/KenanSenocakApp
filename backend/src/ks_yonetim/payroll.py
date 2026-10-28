@@ -24,6 +24,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from .api import ApiError, add_audit, require_sidecar_token
+from .attendance import assert_attendance_complete
 from .backup import BackupError, backup_manager
 from .database import get_session
 from .exports import Column, ReportTable, pdf_response, xlsx_response
@@ -175,6 +176,13 @@ def _period_days(period: PayrollPeriod) -> list[date]:
     ]
 
 
+def _unpaid_fraction(log: WorkLog, settings: LaborSettings) -> Decimal:
+    """Kısmi (yarım gün/saatlik) ücretsiz izinde günün yalnız izin saati kadarı düşülür."""
+    if log.leave_hours and log.leave_hours > 0 and log.normal_hours > 0:
+        return min(Decimal(1), Decimal(log.leave_hours) / settings.standard_day_hours)
+    return Decimal(1)
+
+
 def compute_employee(
     employee: Employee,
     logs: dict[date, WorkLog],
@@ -201,7 +209,11 @@ def compute_employee(
 
     for day in days:
         log = logs.get(day)
-        paid_log = log is not None and log.work_status in PAID_STATUSES
+        # Kısmi ücretsiz izin gününde çalışılan saatler (normal_hours > 0) ücretlendirilir.
+        paid_log = log is not None and (
+            log.work_status in PAID_STATUSES
+            or (log.work_status in UNPAID_STATUSES and log.normal_hours > 0)
+        )
         in_window = (start is None or day >= start) and (end is None or day <= end)
         rate = book.at(employee.id, day)
         if rate is None:
@@ -218,7 +230,7 @@ def compute_employee(
             value = daily_equivalent(rate.rate_kurus, "monthly", day, settings)
             base_exact += value
             if log is not None and log.work_status in UNPAID_STATUSES:
-                unpaid_exact += value
+                unpaid_exact += value * _unpaid_fraction(log, settings)
                 unpaid_days += 1
         elif not paid_log:
             continue
@@ -568,6 +580,8 @@ def finalize_period(
             409,
             {"state": period.state},
         )
+    # attendance_enforcement_start_date sonrasında zorunlu iş günü puantajsız personel varsa engellenir.
+    assert_attendance_complete(session, period)
     entries = list(
         session.scalars(
             select(PayrollEntry).where(

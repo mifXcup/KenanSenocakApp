@@ -12,9 +12,27 @@ from sqlalchemy.orm import Session
 
 from .models import AppSetting
 
-WORK_STATUSES = ("worked", "half_day", "overtime", "paid_leave", "unpaid_leave", "absent")
-PAID_STATUSES = frozenset({"worked", "half_day", "overtime", "paid_leave"})
-UNPAID_STATUSES = frozenset({"unpaid_leave", "absent"})
+# Elle (puantaj ekranı / Excel) girilebilen durumlar.
+WORK_STATUSES = (
+    "worked",
+    "half_day",
+    "overtime",
+    "paid_leave",
+    "unpaid_leave",
+    "absent",
+    "public_holiday",
+    "weekly_rest",
+)
+# Yalnız izin talebi onayıyla üretilen durumlar (izin hak defteriyle tutarlı kalsın diye).
+LEAVE_MANAGED_STATUSES = frozenset({"annual_leave", "sick_leave", "excused_leave"})
+ALL_STATUSES = WORK_STATUSES + tuple(sorted(LEAVE_MANAGED_STATUSES))
+PAID_STATUSES = frozenset(
+    {"worked", "half_day", "overtime", "paid_leave", "annual_leave", "public_holiday"}
+)
+# Ücretsiz: raporlu (işveren ödemez) ve mazeret izni de ücretsiz sayılır.
+UNPAID_STATUSES = frozenset({"unpaid_leave", "absent", "sick_leave", "excused_leave"})
+# Ücreti etkilemeyen takvim durumu: aylıkta kesinti yok, günlük/saatlikte ödeme yok.
+NEUTRAL_STATUSES = frozenset({"weekly_rest"})
 HOUR_QUANT = Decimal("0.01")
 
 SETTING_DEFAULTS = {"overtime_multiplier_percent": 150, "standard_day_hours": 8}
@@ -54,9 +72,9 @@ def normalize_hours(
     """Duruma göre varsayılan saatleri uygular ve tutarsız girişleri reddeder."""
     standard = Decimal(settings.standard_day_hours)
     overtime = Decimal(overtime_hours or 0)
-    if status in UNPAID_STATUSES:
+    if status in UNPAID_STATUSES or status in NEUTRAL_STATUSES:
         if (normal_hours or 0) > 0 or overtime > 0:
-            raise HoursError("Ücretsiz izin ve devamsızlık kaydında saat girilemez.")
+            raise HoursError("Ücretsiz izin, devamsızlık ve haftalık izin kaydında saat girilemez.")
         return Decimal("0.00"), Decimal("0.00")
     if status == "overtime":
         if overtime <= 0:

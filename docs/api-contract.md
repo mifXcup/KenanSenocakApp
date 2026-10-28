@@ -509,3 +509,159 @@ noktadan (`ks_yonetim.clock.business_today`) okunur; testler bunu sabitler.
   ]
 }
 ```
+
+
+## P0 / WP-B2 — İzin, puantaj ve maaş güvenliği
+
+Resmî bordro/SGK değildir; işletme içi takip. WP-B1/B1.1 sözleşmesi değişmedi; aşağıdakiler eklemedir. Miktarlar
+(saat, gün) 2 ondalıklı string olarak döner. İş tarihi `ks_yonetim.clock.business_today`'dir; istemci tarih
+gerektiren çağrılarda (izin ters kaydı, `receipt_date` vb.) bugünün tarihini açıkça göndermelidir.
+
+### Uç noktalar
+
+| Method | Yol | Amaç |
+| --- | --- | --- |
+| GET/PUT | `/settings/attendance` | `attendance_enforcement_start_date`, `default_salary_day` (1–31), `allow_negative_leave_balance`; `null` ayarı kaldırır |
+| POST/GET | `/holidays` | Resmî tatil (`holiday_date`, `name`, `is_half_day`); aktif tarih benzersiz. Filtre: `year`, `date_from`, `date_to`, `include_cancelled` |
+| POST | `/holidays/{id}/cancel` | Tatili iptal et (tarih yeniden tanımlanabilir) |
+| POST/GET | `/weekly-work-plans` | Haftalık çalışma planı. `employee_id` boşsa şirket planı; `workdays` ISO hafta günleri (1=Pzt … 7=Paz); yeni plan öncekinin `effective_to`'sunu kapatır. Filtre: `employee_id`, `company_only` |
+| GET | `/employees/{id}/work-calendar` | Gün tipi (`workday`, `weekly_rest`, `public_holiday`, `outside_employment`), zorunluluk ve puantaj (`date_from`, `date_to`) |
+| GET | `/attendance/check` | Puantaj eksiklik/uyumsuzluk kontrolü (`date_from`+`date_to` veya `payroll_period_id`; `employee_id`, `include_clean`) |
+| GET | `/attendance/duplicate-reports` | Migration sırasında çözülen mükerrer puantaj raporu |
+| GET | `/payroll-periods/{id}/salary-due-dates` | Personel bazında türetilmiş maaş vadesi (önizleme) |
+| GET/POST | `/leave-types`, `/leave-types/{id}/archive` | İzin türleri (5 sistem türü + özel); sistem türü arşivlenemez |
+| GET/POST | `/employees/{id}/leave-ledger` | İzin hak defteri ve bakiye (`leave_type_code`, `as_of`) / hak, hakediş, düzeltme kaydı |
+| POST | `/leave-ledger/{entry_id}/reverse` | Ters kayıt (`entry_date?`, `note?`) |
+| GET | `/employees/{id}/leave-entitlement?year=` | Kıdeme göre yıllık izin gün önerisi (bilgilendirme) |
+| POST/GET | `/leave-requests` | İzin talebi oluştur / listele (`employee_id`, `state`, `date_from`, `date_to`) |
+| GET | `/leave-requests/{id}` | Talep + üretilen `work_log_ids` |
+| POST | `/leave-requests/{id}/approve`, `/reject`, `/cancel` | Yönetici kararı (gövde: `note?`) |
+
+Mevcut uçlardaki değişiklikler: `POST/PATCH /employees` ve `Employee` yanıtı `email`, `address`, `skill` (ustalık),
+`emergency_contact_name/phone/relation`, `payment_method` (`cash`, `bank_transfer`, `other`), `salary_day` (1–31) taşır.
+`WorkLog` yanıtı `leave_request_id`, `leave_hours`, `source` (`manual` | `leave`) taşır. `POST /work-logs` yeni
+`public_holiday` (ücretli, varsayılan normal süre) ve `weekly_rest` (saat girilmez, tutar 0) durumlarını kabul eder;
+`annual_leave`, `sick_leave`, `excused_leave` yalnız izin talebiyle üretilir (elle gönderilirse `422`).
+`POST /payroll-periods/{id}/finalize` artık zorunlu gün eksiğinde `409 attendance_incomplete` döner ve vade türetir.
+
+### Enumlar
+
+| Alan | Değerler |
+| --- | --- |
+| Puantaj `work_status` | `worked`, `half_day`, `overtime`, `paid_leave`, `unpaid_leave`, `absent` (mevcut) + `annual_leave`, `sick_leave`, `excused_leave`, `public_holiday`, `weekly_rest` |
+| Ücretli / ücretsiz | Ücretli: `worked`, `half_day`, `overtime`, `paid_leave`, `annual_leave`, `public_holiday`. Ücretsiz: `unpaid_leave`, `absent`, `sick_leave` (raporlu; işveren ödemez), `excused_leave`. Nötr: `weekly_rest` (aylıkta kesinti yok, günlük/saatlikte ödeme yok) |
+| İzin türü `code` | `annual` (hak düşer), `sick`, `other_paid` (`paid_leave`), `unpaid`, `excused`; özel türler `work_status` seçer |
+| İzin talebi `day_part` | `full`, `half_am`, `half_pm`, `hourly` (`hours` zorunlu, ≤ günlük normal süre) |
+| İzin talebi `request_state` | `pending`, `approved`, `rejected`, `cancelled` |
+| Hak defteri `entry_type` | `grant`, `accrual`, `use` (sistem), `adjustment` (işaretli), `reversal` (sistem) |
+
+### Kurallar
+
+- **Zorunlu iş günü:** personelin işe giriş/çıkış aralığında, haftalık planda çalışma günü olan ve resmî tatil olmayan gün.
+  Plan önceliği: personel planı > şirket planı > varsayılan (Pazartesi–Cumartesi). Plan yoksa Pazar haftalık izindir.
+- **Devam zorunluluğu:** `attendance_enforcement_start_date` yoksa veya dönem bu tarihten önceyse eski davranış korunur
+  (puantajsız gün engel değil; aylıkta çalışıldı sayılır). Tarih dönemin ortasındaysa yalnız bu tarihten itibaren olan
+  günler denetlenir. Kesinleştirme, hesaplanmış dönemdeki personelden zorunlu günü puantajsız olan varsa
+  `409 attendance_incomplete` (`details.employees[]`: `employee_id`, `employee_name`, `missing_count`, `missing_dates`) döner;
+  dönem `calculated` durumunda kalır.
+- **Tekil aktif puantaj:** veritabanında (`work_logs`, kısmi benzersiz indeks `status = 'ACTIVE'`) aynı personel+gün için
+  tek aktif kayıt vardır; iptal edilen kayıtlar kısıtı tutmaz. Yarışta da `409 duplicate_work_log` döner.
+- **Mükerrer migration:** eski veritabanındaki çoklu aktif kayıtlar **silinmez**. Aynı personel+gün için en eski kayıt
+  (`created_at`, `id`) korunur, diğerleri `CANCELLED` yapılır, nota işaret düşülür, `audit_logs`'a (`actor = migration`)
+  yazılır ve `work_log_duplicate_reports` tablosuna (`kept_*`, `cancelled_*` tutar/durum, `in_locked_period`) raporlanır.
+  Kesinleşmiş döneme denk gelen mükerrerler de aynı kuralla çözülür; `in_locked_period = true` ile işaretlenir ve
+  maliyet farkı rapordan izlenip düzeltme hareketiyle ele alınmalıdır.
+- **İzin hak defteri (saat cinsinden):** 1 gün = `standard_day_hours`. Bakiye geçerlilik dönemine (`valid_from`/`valid_to`)
+  göre FIFO hesaplanır: önce süresi dolacak hak tüketilir; süresi dolan kullanılmamış saat `expired_hours` olur.
+  `available_hours` bakiye tarihinde geçerli kalan hak, `overdrawn_hours` karşılanamayan kullanımdır,
+  `balance_hours = available − overdrawn`. Yalnız `deducts_entitlement` türleri (yıllık) hak tutar.
+- **Yetersiz bakiye:** onay `409 insufficient_leave_balance` (`details`: `available_hours`, `required_hours`) ile reddedilir ve
+  hiçbir kayıt bırakmaz. `allow_negative_leave_balance = true` ise onaylanır ve bakiye negatife düşer. Negatif düzeltme ve
+  kullanılmış hakkın terslenmesi (`reversal_makes_negative`) aynı kurala bağlıdır.
+- **İzin onayı:** haftalık plan ve resmî tatile denk gelen günler izin sayılmaz (hak düşmez, puantaj yazılmaz); tüm günler
+  atlanıyorsa `422 leave_no_working_days`. Kalan her gün için puantaj üretilir: ücretli izinde `normal_hours` = günlük
+  normal süre (izin saati + varsayılan çalışılan kalan saat), ücretsizde 0; yarım gün/saatlik **ücretsiz** izinde
+  `normal_hours` = günlük süre − izin saati. `leave_hours` izin saatidir. Maliyet tarihte geçerli ücretle hesaplanır;
+  ücret yoksa `422 missing_labor_rate`. Aylık çalışanda kısmi ücretsiz izin yalnız `leave_hours / günlük süre` oranında kesinti yapar.
+- **Çakışma:** o günlerde aktif puantaj varsa `409 attendance_conflict` (`details.dates`); bekleyen/onaylı başka talep varsa
+  `409 leave_overlap`; işe giriş/çıkış dışı tarih `422 leave_outside_employment`.
+- **Dönem kilidi:** kesinleşmiş/kapanmış dönemle kesişen izin talebi oluşturma, onay ve onaylı talebin iptali
+  `409 period_locked`; yarım kalan hiçbir kayıt bırakılmaz. Ay sınırını aşan talepte herhangi bir gün kilitliyse tamamı reddedilir.
+- **Onaylı izin iptali:** puantajlar `CANCELLED` olur (silinmez, audit'lenir), her `use` kaydı için aynı tarihli `reversal`
+  yazılır. İzin talebinden üretilen puantaj elle değiştirilemez/iptal edilemez (`409 leave_managed`).
+- **Maaş vadesi:** finalize'da tahakkuk vadesi önceliği: istekteki `payment_due_date` > personel `salary_day` > şirket
+  `default_salary_day` > dönem bitişi (eski davranış). Türetme: dönem bitişinden sonraki ilk maaş günü; ay sonunu aşan gün ay
+  sonuna iner (örn. 31 → 30 Kasım, 28/29 Şubat). Saf fonksiyondur, sistem saatine bağlı değildir.
+- Yıllık izin kıdem önerisi: <1 yıl 0, 1–<5 yıl 14, 5–<15 yıl 20, ≥15 yıl 26 gün (yıl sonu itibarıyla tamamlanan yıl). Öneri hakkı
+  otomatik yazmaz.
+
+### Hata kodları (yeni)
+
+| Kod | HTTP | Anlam |
+| --- | --- | --- |
+| `attendance_incomplete` | 409 | Enforcement sonrası zorunlu gün puantajı eksik; kesinleştirilemez |
+| `duplicate_work_log` | 409 | Aynı personel+gün aktif puantaj (artık veritabanı kısıtıdır) |
+| `leave_managed` | 409 | İzin talebinden üretilen puantaj doğrudan değiştirilemez |
+| `duplicate_holiday`, `holiday_cancelled` | 409 | Tatil tekrarı / zaten iptal |
+| `plan_order` | 409 | Yeni plan başlangıcı mevcut plandan sonra olmalı |
+| `range_required`, `range_too_large`, `invalid_range` | 422 | Kontrol aralığı hatalı |
+| `duplicate_leave_type`, `system_leave_type`, `leave_type_archived` | 409 | İzin türü kuralları |
+| `leave_type_without_entitlement` | 422 | Hak tutmayan türe hak kaydı |
+| `insufficient_leave_balance` | 409 | İzin bakiyesi yetersiz |
+| `reversal_makes_negative` | 409 | Tersleme bakiyeyi negatife düşürür |
+| `system_entry` | 409 | `use`/sistem kaydı yalnız izin iptaliyle geri alınır |
+| `leave_overlap` | 409 | Aynı personelde çakışan bekleyen/onaylı talep |
+| `leave_no_working_days` | 422 | Tarihlerin tamamı tatil/haftalık izin |
+| `leave_outside_employment` | 422 | İzin, işe giriş/çıkış aralığı dışında |
+| `attendance_conflict` | 409 | İzin günlerinde mevcut puantaj (`details.dates`) |
+| `invalid_hours` | 422 | Saatlik izin günlük süreyi aşıyor |
+| `invalid_transition` | 409 | İzin talebi durum geçişi geçersiz (`details.from`, `details.to`) |
+| `period_locked` | 409 | Kesinleşmiş/kapanmış dönemi etkiliyor (izin dahil) |
+
+### Örnek yanıtlar
+
+`GET /attendance/check`:
+
+```json
+{
+  "date_from": "2026-10-01", "date_to": "2026-10-12", "enforcement_start_date": "2026-10-05",
+  "employees_checked": 1,
+  "totals": {"missing_required_day": 6, "enforced_missing_day": 4, "inconsistency": 2},
+  "employees": [{
+    "employee_id": "uuid", "employee_name": "Kontrol Usta", "required_day_count": 7, "logged_day_count": 3,
+    "issues": [
+      {"code": "missing_required_day", "date": "2026-10-05", "enforced": true},
+      {"code": "worked_on_weekly_rest", "date": "2026-10-04", "work_log_id": "uuid", "enforced": false}
+    ]
+  }]
+}
+```
+
+`GET /employees/{id}/leave-ledger` (özet):
+
+```json
+{
+  "employee_id": "uuid",
+  "leave_type": {"code": "annual", "work_status": "annual_leave", "deducts_entitlement": true},
+  "balance": {"as_of": "2026-12-31", "granted_hours": "80.00", "used_hours": "40.00", "adjusted_hours": "0.00",
+              "expired_hours": "0.00", "available_hours": "40.00", "overdrawn_hours": "0.00",
+              "balance_hours": "40.00", "granted_days": "10.00", "used_days": "5.00",
+              "available_days": "5.00", "balance_days": "5.00", "standard_day_hours": 8},
+  "entries": [{"id": "uuid", "entry_type": "grant", "quantity_hours": "80.00", "entry_date": "2026-01-01",
+               "valid_from": null, "valid_to": "2026-12-31", "source": "manual", "is_voided": false}]
+}
+```
+
+`attendance_incomplete` hatası:
+
+```json
+{"error": {"code": "attendance_incomplete", "message": "Zorunlu çalışma günlerinde puantajı eksik personel var; kesinleştirmeden önce tamamlayın.",
+ "details": {"enforcement_start_date": "2026-10-01",
+  "employees": [{"employee_id": "uuid", "employee_name": "Aylık A", "missing_count": 1, "missing_dates": ["2026-10-07"]}]}}}
+```
+
+### WP-B4'e devredilenler (değiştirilmeden korunur)
+
+1. Excel/PDF satın alma dışa aktarımlarının yaşam döngüsüne (planlı/siparişli/kısmi teslim) uyarlanması.
+2. Kısmi teslim miktarının satın alma miktarını aşması engel değil, açıklanabilir uyarı olacak (şu an yalnız tutar toplamı sınırlı).
+3. Müşteri avanslarının raporda projeye bağlı ve bağlantısız olarak ayrılması (şu an müşteri başına tek net bakiye).

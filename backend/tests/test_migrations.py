@@ -389,3 +389,113 @@ def test_19b18b8_schema_upgrades_with_receipt_and_allocation_backfill(tmp_path):
         diff = compare_metadata(MigrationContext.configure(connection), Base.metadata)
     assert diff == [], diff
     engine.dispose()
+
+
+def test_b2_migration_reports_and_resolves_duplicate_work_logs_without_deleting(tmp_path):
+    from alembic import command
+
+    db_path = tmp_path / "dup.db"
+    engine = build_engine(f"sqlite:///{db_path.as_posix()}")
+    config = migrate.alembic_config()
+    migrate._run(config, engine, lambda cfg: command.upgrade(cfg, "d2b8f6a1c4e7"))
+    stamp = "2026-10-27 09:00:00.000000"
+
+    def work_log(log_id, employee, day, status, amount, created, hours=8):
+        return (
+            "INSERT INTO work_logs (id, employee_id, work_date, hours, amount_kurus, status, "
+            "created_at, updated_at) VALUES "
+            f"('{log_id}', '{employee}', '{day}', {hours}, {amount}, '{status}', '{created}', '{created}')"
+        )
+
+    statements = [
+        (
+            "INSERT INTO employees (id, name, status, created_at, updated_at) VALUES "
+            f"('e1', 'Mükerrer Usta', 'ACTIVE', '{stamp}', '{stamp}')"
+        ),
+        (
+            "INSERT INTO employees (id, name, status, created_at, updated_at) VALUES "
+            f"('e2', 'Tekil Usta', 'ACTIVE', '{stamp}', '{stamp}')"
+        ),
+        # 5 Ekim: iki aktif + bir iptal edilmiş; en eski aktif korunmalı.
+        work_log("wl1", "e1", "2026-10-05", "ACTIVE", 80000, "2026-10-05 08:00:00.000000"),
+        work_log("wl2", "e1", "2026-10-05", "ACTIVE", 50000, "2026-10-05 09:00:00.000000", 5),
+        work_log("wl3", "e1", "2026-10-05", "CANCELLED", 99999, "2026-10-05 07:00:00.000000"),
+        work_log("wl4", "e2", "2026-10-06", "ACTIVE", 70000, "2026-10-06 08:00:00.000000"),
+        # 7 Ekim: üç aktif kayıt, kesinleşmiş döneme düşüyor.
+        work_log("wl5", "e1", "2026-10-07", "ACTIVE", 80000, "2026-10-07 08:00:00.000000"),
+        work_log("wl6", "e1", "2026-10-07", "ACTIVE", 40000, "2026-10-07 09:00:00.000000", 4),
+        work_log("wl7", "e1", "2026-10-07", "ACTIVE", 20000, "2026-10-07 10:00:00.000000", 2),
+        (
+            "INSERT INTO payroll_periods (id, period_start, period_end, title, state, status, "
+            f"created_at, updated_at) VALUES ('pp1', '2026-10-07', '2026-10-10', 'Kilitli', "
+            f"'finalized', 'ACTIVE', '{stamp}', '{stamp}')"
+        ),
+    ]
+    with engine.begin() as connection:
+        for sql in statements:
+            connection.exec_driver_sql(sql)
+
+    result = migrate.upgrade_database(engine)
+    assert result["previous"] == "d2b8f6a1c4e7" and result["current"] == migrate.head_revision()
+    backup = next(item for item in backup_manager.list() if item.backup_id == result["backup_id"])
+    backup_manager.verify(backup.backup_id)
+
+    # Hiçbir kayıt silinmedi; aynı gün için yalnız en eski aktif kayıt aktif kaldı.
+    assert query(db_path, "SELECT COUNT(*) FROM work_logs") == [(7,)]
+    assert query(
+        db_path, "SELECT id, status FROM work_logs WHERE status = 'ACTIVE' ORDER BY id"
+    ) == [("wl1", "ACTIVE"), ("wl4", "ACTIVE"), ("wl5", "ACTIVE")]
+    assert query(
+        db_path, "SELECT id, status FROM work_logs WHERE id IN ('wl2','wl3','wl6','wl7') ORDER BY id"
+    ) == [("wl2", "CANCELLED"), ("wl3", "CANCELLED"), ("wl6", "CANCELLED"), ("wl7", "CANCELLED")]
+    notes = query(db_path, "SELECT note FROM work_logs WHERE id = 'wl2'")
+    assert "korunan: wl1" in notes[0][0]
+    assert query(db_path, "SELECT note FROM work_logs WHERE id = 'wl3'") == [(None,)]  # zaten iptal
+
+    reports = query(
+        db_path,
+        "SELECT work_date, kept_work_log_id, cancelled_work_log_id, kept_amount_kurus, "
+        "cancelled_amount_kurus, in_locked_period, resolution FROM work_log_duplicate_reports "
+        "ORDER BY cancelled_work_log_id",
+    )
+    assert reports == [
+        ("2026-10-05", "wl1", "wl2", 80000, 50000, 0, "cancelled_newer_duplicate"),
+        ("2026-10-07", "wl5", "wl6", 80000, 40000, 1, "cancelled_newer_duplicate"),
+        ("2026-10-07", "wl5", "wl7", 80000, 20000, 1, "cancelled_newer_duplicate"),
+    ]
+    assert query(
+        db_path,
+        "SELECT COUNT(*) FROM audit_logs WHERE action = 'cancelled_duplicate' AND actor = 'migration'",
+    ) == [(3,)]
+
+    # Veritabanı artık ikinci aktif kaydı reddeder; iptal edilmiş kayıt serbesttir.
+    with closing(sqlite3.connect(db_path)) as connection:
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                "INSERT INTO work_logs (id, employee_id, work_date, hours, amount_kurus, status, "
+                "created_at, updated_at) VALUES ('x1', 'e1', '2026-10-05', 8, 1, 'ACTIVE', "
+                "'2026-10-28 08:00:00', '2026-10-28 08:00:00')"
+            )
+        connection.execute(
+            "INSERT INTO work_logs (id, employee_id, work_date, hours, amount_kurus, status, "
+            "created_at, updated_at) VALUES ('x2', 'e1', '2026-10-05', 8, 1, 'CANCELLED', "
+            "'2026-10-28 08:00:00', '2026-10-28 08:00:00')"
+        )
+
+    assert {row[0] for row in query(db_path, "SELECT code FROM leave_types")} == {
+        "annual", "sick", "other_paid", "unpaid", "excused"
+    }
+    assert query(db_path, "SELECT salary_day, email FROM employees WHERE id = 'e1'") == [(None, None)]
+    assert query(db_path, "SELECT source, leave_request_id FROM work_logs WHERE id = 'wl1'") == [
+        ("manual", None)
+    ]
+    assert query(db_path, "PRAGMA integrity_check") == [("ok",)]
+    assert query(db_path, "PRAGMA foreign_key_check") == []
+
+    again = migrate.upgrade_database(engine)
+    assert again["backup_id"] is None
+    assert query(db_path, "SELECT COUNT(*) FROM work_log_duplicate_reports") == [(3,)]
+    with engine.connect() as connection:
+        diff = compare_metadata(MigrationContext.configure(connection), Base.metadata)
+    assert diff == [], diff
+    engine.dispose()

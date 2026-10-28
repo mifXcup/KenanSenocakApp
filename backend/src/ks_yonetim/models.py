@@ -18,6 +18,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -310,6 +311,16 @@ class Employee(TimestampMixin, Base):
     iban: Mapped[str | None] = mapped_column(String(34))
     payment_note: Mapped[str | None] = mapped_column(Text)
     note: Mapped[str | None] = mapped_column(Text)
+    # WP-B2 profil alanları: iletişim, ustalık, acil durum kişisi, ödeme yöntemi, maaş günü istisnası.
+    email: Mapped[str | None] = mapped_column(String(180))
+    address: Mapped[str | None] = mapped_column(Text)
+    skill: Mapped[str | None] = mapped_column(String(120))
+    emergency_contact_name: Mapped[str | None] = mapped_column(String(180))
+    emergency_contact_phone: Mapped[str | None] = mapped_column(String(40))
+    emergency_contact_relation: Mapped[str | None] = mapped_column(String(60))
+    payment_method: Mapped[str | None] = mapped_column(String(24))
+    # Boşsa şirket varsayılan maaş günü (app_settings.default_salary_day) kullanılır.
+    salary_day: Mapped[int | None] = mapped_column(Integer)
     status: Mapped[RecordStatus] = mapped_column(
         Enum(RecordStatus), default=RecordStatus.ACTIVE, index=True
     )
@@ -351,6 +362,14 @@ class WorkLog(TimestampMixin, Base):
     __table_args__ = (
         Index("ix_work_log_employee_date", "employee_id", "work_date"),
         Index("ix_work_log_project_date", "project_id", "work_date"),
+        # Aynı personel + gün için veritabanı düzeyinde tek aktif puantaj (iptaller serbest).
+        Index(
+            "uq_work_log_employee_day_active",
+            "employee_id",
+            "work_date",
+            unique=True,
+            sqlite_where=text("status = 'ACTIVE'"),
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
@@ -374,6 +393,12 @@ class WorkLog(TimestampMixin, Base):
     )
     calculated_amount_kurus: Mapped[int | None] = mapped_column(Integer)
     manual_amount_kurus: Mapped[int | None] = mapped_column(Integer)
+    # İzin talebinden üretilen kayıtlar sistem yönetimlidir (leave_request_id dolu, source = leave).
+    leave_request_id: Mapped[str | None] = mapped_column(
+        ForeignKey("leave_requests.id"), index=True
+    )
+    leave_hours: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
+    source: Mapped[str] = mapped_column(String(16), default="manual", server_default="manual")
     note: Mapped[str | None] = mapped_column(Text)
     status: Mapped[RecordStatus] = mapped_column(
         Enum(RecordStatus), default=RecordStatus.ACTIVE, index=True
@@ -757,4 +782,142 @@ class ProjectCostForecast(Base):
     status: Mapped[RecordStatus] = mapped_column(
         Enum(RecordStatus), default=RecordStatus.ACTIVE, index=True
     )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class LeaveType(TimestampMixin, Base):
+    """İzin türü. work_status, onaylanan iznin puantajda alacağı durumu belirler (genişletilebilir)."""
+
+    __tablename__ = "leave_types"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    code: Mapped[str] = mapped_column(String(32), nullable=False, unique=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    work_status: Mapped[str] = mapped_column(String(24), nullable=False)
+    deducts_entitlement: Mapped[bool] = mapped_column(default=False)
+    is_system: Mapped[bool] = mapped_column(default=False)
+    status: Mapped[RecordStatus] = mapped_column(
+        Enum(RecordStatus), default=RecordStatus.ACTIVE, index=True
+    )
+
+
+class LeaveRequest(TimestampMixin, Base):
+    __tablename__ = "leave_requests"
+    __table_args__ = (Index("ix_leave_request_employee_dates", "employee_id", "start_date"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    employee_id: Mapped[str] = mapped_column(
+        ForeignKey("employees.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    leave_type_id: Mapped[str] = mapped_column(
+        ForeignKey("leave_types.id", ondelete="RESTRICT"), nullable=False
+    )
+    start_date: Mapped[date] = mapped_column(Date, nullable=False)
+    end_date: Mapped[date] = mapped_column(Date, nullable=False)
+    # full | half_am | half_pm | hourly; yarım gün ve saatlik izin tek gün içindir.
+    day_part: Mapped[str] = mapped_column(String(12), default="full", server_default="full")
+    hours_per_day: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
+    total_hours: Mapped[Decimal | None] = mapped_column(Numeric(8, 2))
+    request_state: Mapped[str] = mapped_column(
+        String(12), default="pending", server_default="pending", index=True
+    )
+    reason: Mapped[str | None] = mapped_column(Text)
+    decision_note: Mapped[str | None] = mapped_column(String(255))
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    idempotency_key: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
+    status: Mapped[RecordStatus] = mapped_column(
+        Enum(RecordStatus), default=RecordStatus.ACTIVE, index=True
+    )
+
+
+class LeaveLedgerEntry(TimestampMixin, Base):
+    """İzin hak defteri (saat cinsinden, işaretli). Silinmez; düzeltme ters kayıtla yapılır."""
+
+    __tablename__ = "leave_ledger_entries"
+    __table_args__ = (Index("ix_leave_ledger_employee_type", "employee_id", "leave_type_id"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    employee_id: Mapped[str] = mapped_column(
+        ForeignKey("employees.id", ondelete="RESTRICT"), nullable=False
+    )
+    leave_type_id: Mapped[str] = mapped_column(
+        ForeignKey("leave_types.id", ondelete="RESTRICT"), nullable=False
+    )
+    # grant | accrual | use | adjustment | reversal
+    entry_type: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    quantity_hours: Mapped[Decimal] = mapped_column(Numeric(8, 2), nullable=False)
+    entry_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    valid_from: Mapped[date | None] = mapped_column(Date)
+    valid_to: Mapped[date | None] = mapped_column(Date)
+    leave_request_id: Mapped[str | None] = mapped_column(
+        ForeignKey("leave_requests.id"), index=True
+    )
+    reversed_entry_id: Mapped[str | None] = mapped_column(
+        ForeignKey("leave_ledger_entries.id", ondelete="RESTRICT"), unique=True
+    )
+    source: Mapped[str] = mapped_column(String(12), default="manual", server_default="manual")
+    note: Mapped[str | None] = mapped_column(Text)
+    idempotency_key: Mapped[str] = mapped_column(String(120), nullable=False, unique=True)
+    status: Mapped[RecordStatus] = mapped_column(
+        Enum(RecordStatus), default=RecordStatus.ACTIVE, index=True
+    )
+
+
+class PublicHoliday(TimestampMixin, Base):
+    __tablename__ = "public_holidays"
+    __table_args__ = (
+        Index(
+            "uq_public_holiday_date_active",
+            "holiday_date",
+            unique=True,
+            sqlite_where=text("status = 'ACTIVE'"),
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    holiday_date: Mapped[date] = mapped_column(Date, nullable=False)
+    name: Mapped[str] = mapped_column(String(180), nullable=False)
+    is_half_day: Mapped[bool] = mapped_column(default=False)
+    status: Mapped[RecordStatus] = mapped_column(
+        Enum(RecordStatus), default=RecordStatus.ACTIVE, index=True
+    )
+
+
+class WeeklyWorkPlan(TimestampMixin, Base):
+    """Haftalık çalışma planı; employee_id boşsa şirket planıdır. Yeni plan öncekini kapatır."""
+
+    __tablename__ = "weekly_work_plans"
+    __table_args__ = (Index("ix_weekly_plan_employee_from", "employee_id", "effective_from"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    employee_id: Mapped[str | None] = mapped_column(
+        ForeignKey("employees.id", ondelete="RESTRICT")
+    )
+    effective_from: Mapped[date] = mapped_column(Date, nullable=False)
+    effective_to: Mapped[date | None] = mapped_column(Date)
+    # Pazartesi..Pazar için 7 karakter: 1 = çalışma günü, 0 = haftalık izin.
+    workdays: Mapped[str] = mapped_column(String(7), nullable=False)
+    note: Mapped[str | None] = mapped_column(String(255))
+    status: Mapped[RecordStatus] = mapped_column(
+        Enum(RecordStatus), default=RecordStatus.ACTIVE, index=True
+    )
+
+
+class WorkLogDuplicateReport(Base):
+    """Eski veritabanında bulunan mükerrer puantajların migration raporu (hiçbir kayıt silinmez)."""
+
+    __tablename__ = "work_log_duplicate_reports"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    employee_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    work_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    kept_work_log_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    cancelled_work_log_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    kept_amount_kurus: Mapped[int] = mapped_column(Integer, nullable=False)
+    cancelled_amount_kurus: Mapped[int] = mapped_column(Integer, nullable=False)
+    kept_work_status: Mapped[str] = mapped_column(String(16), nullable=False)
+    cancelled_work_status: Mapped[str] = mapped_column(String(16), nullable=False)
+    in_locked_period: Mapped[bool] = mapped_column(default=False)
+    resolution: Mapped[str] = mapped_column(String(40), nullable=False)
+    detail: Mapped[dict | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
