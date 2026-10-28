@@ -9,6 +9,7 @@ from . import models  # noqa: F401
 from .api import ApiError, api_error_handler, router, validation_error_handler
 from .attendance import router as attendance_router
 from .backup import BackupError, backup_manager
+from .calendar_api import router as calendar_router
 from .customers import router as customers_router
 from .database import ensure_schema
 from .employees import router as employees_router
@@ -56,6 +57,7 @@ app.include_router(finance_router)
 app.include_router(customers_router)
 app.include_router(attendance_router)
 app.include_router(leave_router)
+app.include_router(calendar_router)
 app.include_router(project_costs_router)
 app.include_router(project_finance_router)
 app.include_router(receipts_router)

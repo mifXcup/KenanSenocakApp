@@ -200,3 +200,23 @@ mevcut veri kopyalanmaz). SQLAlchemy'nin SQLite yansıtması sütun içi `ON DEL
 11. `e3c9a7b5d1f2` leave attendance and unique work log (head). `work_logs.leave_request_id` sütun içi
 `REFERENCES leave_requests (id)` olarak eklenir (B1'deki `ON DELETE` notu geçerlidir). Mükerrer çözümü benzersiz indeks
 oluşturulmadan önce aynı transaction'da yapılır; yükseltme öncesi otomatik `pre_migration` yedeği alınır.
+
+
+## P0 / WP-B3 tabloları
+
+Takvim için kaynak kayıtlarını kopyalayan tablo **yoktur**; olaylar `project_tasks`, `project_visits`,
+`receivable_schedules` (+ dağıtımlar), `purchases`/`payments`, `employee_financial_movements` ve `leave_requests`
+kayıtlarından projeksiyonla üretilir.
+
+- `calendar_manual_events`: elle girilen olay/hatırlatma (`event_type` manual_event/reminder, `start_date`, `end_date`,
+  `all_day`, `start_time`, `repeat_rule`, `repeat_until`, `amount_kurus`, isteğe bağlı proje/personel/müşteri/firma bağı,
+  `status`). Tekrarlar satır olarak yazılmaz.
+- `calendar_event_occurrences`: tek bir tekrarın durumu (`manual_event_id` + `occurrence_date` benzersiz;
+  `occurrence_state` completed/postponed/cancelled; `postponed_to`).
+- `calendar_reminder_preferences`: olay türü başına tercih (`event_type` benzersiz, `enabled`, `offsets_days`); kayıt yoksa
+  varsayılan kullanılır.
+- `notification_deliveries`: teslim edilen bildirimler (`delivery_key` benzersiz = olay|başlangıç|offset|kanal).
+
+### Alembic revizyonu
+
+12. `f4d1b8c6e2a3` calendar manual events and notifications (head)

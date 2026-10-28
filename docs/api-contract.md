@@ -665,3 +665,99 @@ Mevcut uçlardaki değişiklikler: `POST/PATCH /employees` ve `Employee` yanıt�
 1. Excel/PDF satın alma dışa aktarımlarının yaşam döngüsüne (planlı/siparişli/kısmi teslim) uyarlanması.
 2. Kısmi teslim miktarının satın alma miktarını aşması engel değil, açıklanabilir uyarı olacak (şu an yalnız tutar toplamı sınırlı).
 3. Müşteri avanslarının raporda projeye bağlı ve bağlantısız olarak ayrılması (şu an müşteri başına tek net bakiye).
+
+
+## P0 / WP-B3 — Birleşik takvim, Bugün ve hatırlatmalar
+
+Takvim olayları kaynak kayıtlardan her istekte deterministik üretilir (kaynak tabloların kopyası saklanmaz; kaynak
+değişince eski olay kalmaz). Saklananlar: elle girilen olaylar, tekrarlarının durumu, hatırlatma tercihleri ve teslim
+edilen bildirimler. İş tarihi `clock.business_today`'dir. Backend bildirim göstermez; Electron `due` kayıtlarını alır ve
+teslim bildirir.
+
+| Method | Yol | Amaç |
+| --- | --- | --- |
+| GET | `/calendar/events` | `date_from`, `date_to` (zorunlu, en fazla 401 gün); `event_type`, `project_id`, `employee_id`, `customer_id`, `supplier_id`, `state` |
+| GET | `/today` | `overdue`, `today`, `next_7_days` grupları; her grupta `count`, `amount_kurus`, `receivable_kurus`, `payable_kurus`, `events`; `totals` |
+| POST/GET | `/calendar/manual-events` | Manuel olay/hatırlatma oluştur / listele (`include_cancelled`) |
+| GET/PATCH | `/calendar/manual-events/{id}` | Oku / düzenle |
+| POST | `/calendar/manual-events/{id}/complete` | Tekrarı tamamla (`occurrence_date`; tekrarlıda zorunlu) |
+| POST | `/calendar/manual-events/{id}/postpone` | Tekrarı ertele (`occurrence_date`, `new_date`) |
+| POST | `/calendar/manual-events/{id}/cancel` | `occurrence_date` ile tek tekrarı, tarihsiz tüm seriyi iptal et |
+| GET/PUT | `/calendar/reminder-preferences` | Olay türü başına `enabled` ve `offsets_days`; PUT gövdesi `{"items": [...]}` |
+| GET | `/notifications/due` | Bugün gösterilmesi gereken, henüz teslim edilmemiş bildirimler (`channel = windows`) |
+| POST | `/notifications/delivered` | `{"delivery_key"}`: bildirimi teslim edildi işaretle (tekrar çağrı `already_delivered: true`) |
+
+### Olay yapısı
+
+`event_id`, `source_type`, `source_id`, `occurrence_date`, `event_type`, `title`, `description`, `start_date`, `end_date`,
+`all_day`, `state`, `amount_kurus` (boş olabilir), `project_id`, `employee_id`, `customer_id`, `supplier_id`,
+`source_route`, `notification_defaults`. `event_id = source_type:source_id:occurrence_date` ve tekrar üretilebilirdir.
+`source_route`: `{entity, entity_id, project_id, employee_id, customer_id, supplier_id}`; istemci `entity` değerinden
+deep-link üretir. `notification_defaults`: `{enabled, offsets_days, is_financial}`.
+
+| Kaynak | `source_type` | `event_type` | `entity` | Tutar / not |
+| --- | --- | --- | --- | --- |
+| Proje görevi vadesi | `project_task` | `project_task` | `project_task` | `task_state` ekstra alan; `done` → completed |
+| Ziyaret | `project_visit` | `project_visit` | `project_visit` | `visit_state` completed/cancelled yansır |
+| Müşteri alacak planı vadesi | `receivable_schedule` | `receivable_due` | `receivable_schedule` | açık kalan (yaşlandırmayla aynı hesap); ödenince completed ve plan tutarı |
+| Tedarikçi borç vadesi | `supplier_purchase` | `supplier_payable` | `purchase` | açık kalan; planlı/siparişli satın alma ve vadesizler görünmez; ödenince completed |
+| Maaş / personel ödeme vadesi | `employee_movement` | `payroll_due` | `employee_financial_movement` | kalan maaş borcu; ödenince completed |
+| Onaylı izin | `leave_request` | `leave` | `leave_request` | `start_date`–`end_date`; bekleyen/reddedilen/iptal edilen yok |
+| İşe dönüş | `leave_return` | `leave_return` | `leave_request` | iznin sonrasındaki ilk zorunlu iş günü (haftalık izin ve tatil atlanır) |
+| Manuel | `manual_event` | `manual_event` \| `reminder` | `calendar_manual_event` | `original_date` (ertelenen tekrar), `repeat_rule`, `start_time` |
+
+Durum: `completed`/`cancelled` kaynak durumundan; aksi halde `overdue` (tarih < bugün), `today`, `upcoming`.
+İptal edilmiş alacak planı, arşivlenmiş proje ve iptal edilmiş manuel seri takvimde görünmez.
+
+### Manuel olay ve tekrar
+
+`repeat_rule`: `none`, `daily`, `weekly`, `monthly`; isteğe bağlı `repeat_until`. Tekrarlar sorgu aralığında üretilir, önceden
+satır yazılmaz. Aylık tekrar başlangıç gününe çıpalıdır; ay sonunu aşan gün ayın son gününe iner (31 Ocak → 28/29 Şubat →
+31 Mart). Çok günlü olay `end_date − start_date` süresini her tekrara taşır. Tekrarın durumu `calendar_event_occurrences`
+satırıdır: `completed`, `postponed` (`postponed_to`), `cancelled`. Ertelenen tekrar yalnız yeni tarihte görünür ve
+`original_date` ile kimliğini korur; tamamlanan/iptal edilen tekrar yeniden işlenemez (`occurrence_closed`). Tamamlanma/erteleme
+yapılmış olayın `start_date`/`repeat_rule` değeri değiştirilemez (`event_has_history`).
+
+### Bildirim kuralları
+
+- Varsayılan zamanlar: finansal olaylar (`receivable_due`, `supplier_payable`, `payroll_due`) vade günü ve bir gün önce
+  (`[0, 1]`); diğerleri bir gün önce (`[1]`). `PUT /calendar/reminder-preferences` ile türe göre değiştirilir (0–30 gün).
+- Bir bildirim `olay açık (today/upcoming)` ve `başlangıç − offset ≤ bugün ≤ başlangıç` iken `due`'dur. Kaçırılan offset olay
+  gününe kadar bir kez yakalanır. **Gecikmiş olaylar yeni bildirim üretmez**; `/today` içinde `overdue` olarak kalır.
+- `delivery_key = event_id|start_date|offset_days|channel`; benzersizdir. Teslim edilen anahtar bir daha `due` olmaz;
+  `POST /notifications/delivered` tekrar çağrılsa `already_delivered: true` döner. Anahtar olayın bugünkü projeksiyonuna ve
+  tanımlı offset'e karşı doğrulanır (`event_not_found` 404, `invalid_offset` 422, `invalid_delivery_key` 422).
+- `/today` gecikmiş kaynak olaylar için 730 gün geriye bakar; tekrarlı manuel olayların geçmiş tekrarları yalnız son 7 gün
+  içinde gösterilir (tek seferlik gecikmiş manuel olaylar sınırsızdır).
+
+### Hata kodları (yeni)
+
+| Kod | HTTP | Anlam |
+| --- | --- | --- |
+| `range_too_large`, `invalid_range` | 422 | Takvim aralığı hatalı |
+| `occurrence_date_required` | 422 | Tekrarlı olayda `occurrence_date` zorunlu |
+| `not_an_occurrence` | 422 | Tarih olayın bir tekrarı değil |
+| `occurrence_closed` | 409 | Tekrar tamamlanmış/iptal edilmiş |
+| `invalid_postpone_date` | 422 | Yeni tarih mevcut tarihten sonra olmalı |
+| `event_cancelled` | 409 | İptal edilmiş olay üzerinde işlem |
+| `event_has_history` | 409 | Geçmişi olan olayın tekrar kuralı/başlangıcı değişmez |
+| `invalid_delivery_key`, `invalid_offset` | 422 | Bildirim teslim anahtarı/zamanı geçersiz |
+| `event_not_found` | 404 | Teslim anahtarının olayı yok |
+
+### Örnek yanıt
+
+`GET /notifications/due`:
+
+```json
+{
+  "as_of": "2026-03-11", "channel": "windows", "count": 1,
+  "notifications": [{
+    "delivery_key": "receivable_schedule:uuid:2026-03-12|2026-03-12|1|windows", "channel": "windows",
+    "offset_days": 1, "fire_date": "2026-03-11", "title": "Tahsilat vadesi: Müşteri – Peşinat", "body": null,
+    "event": {"event_id": "receivable_schedule:uuid:2026-03-12", "event_type": "receivable_due", "state": "upcoming",
+              "start_date": "2026-03-12", "amount_kurus": 100000, "customer_id": "uuid",
+              "source_route": {"entity": "receivable_schedule", "entity_id": "uuid", "customer_id": "uuid"},
+              "notification_defaults": {"enabled": true, "offsets_days": [0, 1], "is_financial": true}}
+  }]
+}
+```

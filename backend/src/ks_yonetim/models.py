@@ -921,3 +921,85 @@ class WorkLogDuplicateReport(Base):
     resolution: Mapped[str] = mapped_column(String(40), nullable=False)
     detail: Mapped[dict | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class CalendarManualEvent(TimestampMixin, Base):
+    """Elle girilen olay/hatırlatma. Tekrarlar sorguda üretilir; satır olarak önceden yazılmaz."""
+
+    __tablename__ = "calendar_manual_events"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    # manual_event | reminder
+    event_type: Mapped[str] = mapped_column(String(16), default="manual_event", index=True)
+    title: Mapped[str] = mapped_column(String(180), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    start_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    # Tek tekrar süresi: ilk gün + (end_date - start_date) gün.
+    end_date: Mapped[date | None] = mapped_column(Date)
+    all_day: Mapped[bool] = mapped_column(default=True)
+    start_time: Mapped[str | None] = mapped_column(String(5))
+    repeat_rule: Mapped[str] = mapped_column(String(10), default="none", server_default="none")
+    repeat_until: Mapped[date | None] = mapped_column(Date)
+    amount_kurus: Mapped[int | None] = mapped_column(Integer)
+    project_id: Mapped[str | None] = mapped_column(ForeignKey("projects.id", ondelete="RESTRICT"))
+    employee_id: Mapped[str | None] = mapped_column(
+        ForeignKey("employees.id", ondelete="RESTRICT")
+    )
+    customer_id: Mapped[str | None] = mapped_column(
+        ForeignKey("customers.id", ondelete="RESTRICT")
+    )
+    supplier_id: Mapped[str | None] = mapped_column(
+        ForeignKey("suppliers.id", ondelete="RESTRICT")
+    )
+    status: Mapped[RecordStatus] = mapped_column(
+        Enum(RecordStatus), default=RecordStatus.ACTIVE, index=True
+    )
+
+
+class CalendarEventOccurrence(TimestampMixin, Base):
+    """Manuel olayın tek bir tekrarına ait durum: tamamlandı, ertelendi veya iptal edildi."""
+
+    __tablename__ = "calendar_event_occurrences"
+    __table_args__ = (
+        UniqueConstraint("manual_event_id", "occurrence_date", name="uq_calendar_occurrence"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    manual_event_id: Mapped[str] = mapped_column(
+        ForeignKey("calendar_manual_events.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    occurrence_date: Mapped[date] = mapped_column(Date, nullable=False)
+    # completed | postponed | cancelled
+    occurrence_state: Mapped[str] = mapped_column(String(12), nullable=False)
+    postponed_to: Mapped[date | None] = mapped_column(Date)
+    note: Mapped[str | None] = mapped_column(String(255))
+    changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class CalendarReminderPreference(TimestampMixin, Base):
+    """Olay türü başına bildirim tercihi; kayıt yoksa varsayılan kullanılır."""
+
+    __tablename__ = "calendar_reminder_preferences"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    event_type: Mapped[str] = mapped_column(String(32), nullable=False, unique=True)
+    enabled: Mapped[bool] = mapped_column(default=True)
+    # Virgülle ayrılmış gün farkları: "0,1" = vade günü ve bir gün önce.
+    offsets_days: Mapped[str] = mapped_column(String(40), nullable=False)
+
+
+class NotificationDelivery(Base):
+    """Teslim edilen bildirimler. delivery_key ile aynı bildirim iki kez teslim edilemez."""
+
+    __tablename__ = "notification_deliveries"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    delivery_key: Mapped[str] = mapped_column(String(300), nullable=False, unique=True)
+    event_id: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
+    source_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    source_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    occurrence_date: Mapped[date] = mapped_column(Date, nullable=False)
+    offset_days: Mapped[int] = mapped_column(Integer, nullable=False)
+    channel: Mapped[str] = mapped_column(String(16), nullable=False)
+    delivered_on: Mapped[date] = mapped_column(Date, nullable=False)
+    delivered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

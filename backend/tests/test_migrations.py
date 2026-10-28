@@ -499,3 +499,38 @@ def test_b2_migration_reports_and_resolves_duplicate_work_logs_without_deleting(
         diff = compare_metadata(MigrationContext.configure(connection), Base.metadata)
     assert diff == [], diff
     engine.dispose()
+
+
+def test_b2_schema_upgrades_to_head_with_calendar_tables(tmp_path):
+    from alembic import command
+
+    db_path = tmp_path / "b2.db"
+    engine = build_engine(f"sqlite:///{db_path.as_posix()}")
+    config = migrate.alembic_config()
+    migrate._run(config, engine, lambda cfg: command.upgrade(cfg, "e3c9a7b5d1f2"))
+    stamp = "2026-10-27 09:00:00.000000"
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            "INSERT INTO projects (id, name, customer_name, project_state, status, created_at, "
+            f"updated_at) VALUES ('p1', 'Proje', 'Müşteri', 'active', 'ACTIVE', '{stamp}', '{stamp}')"
+        )
+        connection.exec_driver_sql(
+            "INSERT INTO project_tasks (id, project_id, title, due_date, task_state, status, "
+            f"created_at, updated_at) VALUES ('t1', 'p1', 'İş', '2026-11-01', 'todo', 'ACTIVE', '{stamp}', '{stamp}')"
+        )
+
+    result = migrate.upgrade_database(engine)
+    assert result["previous"] == "e3c9a7b5d1f2" and result["current"] == migrate.head_revision()
+    tables = {row[0] for row in query(db_path, "SELECT name FROM sqlite_master WHERE type='table'")}
+    assert {
+        "calendar_manual_events", "calendar_event_occurrences",
+        "calendar_reminder_preferences", "notification_deliveries",
+    } <= tables
+    # Takvim kaynak kayıtları kopyalanmaz: yalnız manuel olay/tercih/teslim tabloları vardır.
+    assert query(db_path, "SELECT COUNT(*) FROM calendar_manual_events") == [(0,)]
+    assert query(db_path, "SELECT title FROM project_tasks") == [("İş",)]
+    assert query(db_path, "PRAGMA foreign_key_check") == []
+    with engine.connect() as connection:
+        diff = compare_metadata(MigrationContext.configure(connection), Base.metadata)
+    assert diff == [], diff
+    engine.dispose()
