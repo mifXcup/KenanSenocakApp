@@ -11,6 +11,15 @@ export const queryKeys = {
   reports: ['reports'] as const,
   backupStatus: ['backup-status'] as const,
   backups: ['backups'] as const,
+  customers: ['customers'] as const,
+  customer: (id: string) => ['customers', id] as const,
+  customerStatement: (id: string) => ['customers', id, 'statement'] as const,
+  profitability: (projectId: string) => ['projects', projectId, 'profitability'] as const,
+  projectBudget: (projectId: string) => ['projects', projectId, 'budget-lines'] as const,
+  calendar: (range: string) => ['calendar', range] as const,
+  today: ['today'] as const,
+  leaveRequests: (range: string) => ['leave-requests', range] as const,
+  payrollPeriods: ['payroll-periods'] as const,
 }
 
 export function useCoreData() {

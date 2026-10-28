@@ -3,6 +3,8 @@ const { contextBridge, ipcRenderer } = require('electron')
 contextBridge.exposeInMainWorld('ksDesktop', {
   api: {
     request: (request) => ipcRenderer.invoke('api:request', request),
+    downloadReport: (request) => ipcRenderer.invoke('api:download', request),
+    readSpreadsheet: () => ipcRenderer.invoke('api:read-spreadsheet'),
   },
   app: {
     getInfo: () => ipcRenderer.invoke('app:get-info'),

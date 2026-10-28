@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from . import clock
 from .api import ApiError, require_sidecar_token
 from .database import get_session
 from .exports import Column, ReportTable, pdf_response, xlsx_response
@@ -62,7 +63,7 @@ class Filters:
 
     @property
     def as_of(self) -> date:
-        return self.date_to or date.today()
+        return self.date_to or clock.business_today()
 
 
 def get_filters(
@@ -425,7 +426,7 @@ def report_monthly_staff_cost(session: Session, f: Filters) -> ReportTable:
 
 
 def report_upcoming_payments(session: Session, f: Filters) -> ReportTable:
-    day = date.today() if f.date_to is None else f.date_to
+    day = clock.business_today() if f.date_to is None else f.date_to
     horizon = day + timedelta(days=f.horizon_days)
     ids = employee_scope(session, f)
     positions = compute_positions(session, ids, day)

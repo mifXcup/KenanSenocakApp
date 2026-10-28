@@ -78,6 +78,8 @@ class MaterialRead(OrmModel):
 class ProjectCreate(BaseModel):
     name: str = Field(min_length=2, max_length=180)
     customer_name: str = Field(min_length=2, max_length=180)
+    # Verilirse müşteri kartı esas alınır ve customer_name karttaki adla eşitlenir.
+    customer_id: str | None = None
     contract_amount_kurus: int | None = Field(default=None, ge=0)
     budget_kurus: int | None = Field(default=None, ge=0)
     stage: Literal["planning", "design", "approval", "production", "delivery", "installation", "completed"] = "planning"
@@ -91,6 +93,7 @@ class ProjectCreate(BaseModel):
 class ProjectUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=2, max_length=180)
     customer_name: str | None = Field(default=None, min_length=2, max_length=180)
+    customer_id: str | None = None
     contract_amount_kurus: int | None = Field(default=None, ge=0)
     budget_kurus: int | None = Field(default=None, ge=0)
     project_state: Literal["active", "completed", "cancelled"] | None = None
@@ -116,6 +119,7 @@ class ProjectRead(OrmModel):
     id: str
     name: str
     customer_name: str
+    customer_id: str | None = None
     contract_amount_kurus: int | None
     budget_kurus: int | None
     project_state: str
@@ -241,6 +245,8 @@ class PurchaseCreate(BaseModel):
     paid_kurus: int = Field(default=0, ge=0)
     description: str | None = Field(default=None, max_length=2000)
     idempotency_key: str = Field(min_length=8, max_length=80)
+    # Yeni kayıt varsayılanı received: eski istemciler davranışı değişmeden kullanır.
+    lifecycle_state: Literal["planned", "ordered", "received"] = "received"
 
     @model_validator(mode="after")
     def validate_amount(self) -> PurchaseCreate:
@@ -301,6 +307,8 @@ class PurchaseRead(OrmModel):
     total_kurus: int
     description: str | None
     status: RecordStatus
+    lifecycle_state: str = "received"
+    received_kurus: int = 0
 
 
 class PurchaseDetail(PurchaseRead):
@@ -516,6 +524,14 @@ class EmployeeCreate(BaseModel):
     iban: str | None = Field(default=None, max_length=48)
     payment_note: str | None = Field(default=None, max_length=2000)
     note: str | None = Field(default=None, max_length=2000)
+    email: str | None = Field(default=None, max_length=180)
+    address: str | None = Field(default=None, max_length=2000)
+    skill: str | None = Field(default=None, max_length=120)
+    emergency_contact_name: str | None = Field(default=None, max_length=180)
+    emergency_contact_phone: str | None = Field(default=None, max_length=40)
+    emergency_contact_relation: str | None = Field(default=None, max_length=60)
+    payment_method: PaymentMethod | None = None
+    salary_day: int | None = Field(default=None, ge=1, le=31)
 
     @model_validator(mode="after")
     def validate_employee(self) -> EmployeeCreate:
@@ -548,6 +564,14 @@ class EmployeeUpdate(BaseModel):
     iban: str | None = Field(default=None, max_length=48)
     payment_note: str | None = Field(default=None, max_length=2000)
     note: str | None = Field(default=None, max_length=2000)
+    email: str | None = Field(default=None, max_length=180)
+    address: str | None = Field(default=None, max_length=2000)
+    skill: str | None = Field(default=None, max_length=120)
+    emergency_contact_name: str | None = Field(default=None, max_length=180)
+    emergency_contact_phone: str | None = Field(default=None, max_length=40)
+    emergency_contact_relation: str | None = Field(default=None, max_length=60)
+    payment_method: PaymentMethod | None = None
+    salary_day: int | None = Field(default=None, ge=1, le=31)
 
     @model_validator(mode="after")
     def validate_patch(self) -> EmployeeUpdate:
@@ -575,6 +599,14 @@ class EmployeeRead(OrmModel):
     iban: str | None
     payment_note: str | None
     note: str | None
+    email: str | None = None
+    address: str | None = None
+    skill: str | None = None
+    emergency_contact_name: str | None = None
+    emergency_contact_phone: str | None = None
+    emergency_contact_relation: str | None = None
+    payment_method: str | None = None
+    salary_day: int | None = None
     status: RecordStatus
 
 
@@ -627,7 +659,18 @@ class ImportIssue(BaseModel):
     message: str
 
 
-WorkStatus = Literal["worked", "half_day", "overtime", "paid_leave", "unpaid_leave", "absent"]
+# Yıllık/raporlu/mazeret izin durumları yalnız izin talebi onayıyla üretilir; elle girilemez.
+WorkStatus = Literal[
+    "worked",
+    "half_day",
+    "overtime",
+    "paid_leave",
+    "unpaid_leave",
+    "absent",
+    "public_holiday",
+    "weekly_rest",
+]
+PaymentMethod = Literal["cash", "bank_transfer", "other"]
 
 
 class WorkLogCreate(BaseModel):
@@ -693,6 +736,9 @@ class WorkLogRead(OrmModel):
     amount_kurus: int
     calculated_amount_kurus: int | None
     manual_amount_kurus: int | None
+    leave_request_id: str | None = None
+    leave_hours: Decimal | None = None
+    source: str = "manual"
     note: str | None
     status: RecordStatus
 

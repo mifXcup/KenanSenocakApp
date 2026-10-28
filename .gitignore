@@ -22,3 +22,5 @@ backend/*.db-wal
 .env.*
 !.env.example
 
+
+TESLIM/*.exe

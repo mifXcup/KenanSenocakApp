@@ -7,17 +7,26 @@ from fastapi.exceptions import RequestValidationError
 
 from . import models  # noqa: F401
 from .api import ApiError, api_error_handler, router, validation_error_handler
+from .attendance import router as attendance_router
 from .backup import BackupError, backup_manager
+from .calendar_api import router as calendar_router
+from .customers import router as customers_router
 from .database import ensure_schema
 from .employees import router as employees_router
 from .finance import router as finance_router
+from .finance_reports import router as finance_reports_router
+from .leave import router as leave_router
 from .ml import router as ml_router
 from .operations import router as operations_router
 from .payroll import router as payroll_router
 from .pdf_exports import router as pdf_router
 from .project_costs import router as project_costs_router
+from .project_finance import router as project_finance_router
+from .receipts import router as receipts_router
+from .savings import router as savings_router
 from .spreadsheet_io import router as spreadsheet_router
 from .staff_reports import router as staff_reports_router
+from .supplier_ledger import router as supplier_ledger_router
 from .worklogs import router as worklogs_router
 
 
@@ -34,7 +43,7 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(
     title="Kenan Şenocak Yönetim Core",
-    version="0.3.0",
+    version="0.4.0",
     docs_url=None,
     redoc_url=None,
     lifespan=lifespan,
@@ -47,8 +56,17 @@ app.include_router(operations_router)
 app.include_router(worklogs_router)
 app.include_router(payroll_router)
 app.include_router(finance_router)
+app.include_router(finance_reports_router)
+app.include_router(customers_router)
+app.include_router(attendance_router)
+app.include_router(leave_router)
+app.include_router(calendar_router)
 app.include_router(project_costs_router)
+app.include_router(project_finance_router)
+app.include_router(receipts_router)
+app.include_router(supplier_ledger_router)
 app.include_router(staff_reports_router)
 app.include_router(spreadsheet_router)
 app.include_router(ml_router)
+app.include_router(savings_router)
 app.include_router(pdf_router)

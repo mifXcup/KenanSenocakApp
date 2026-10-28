@@ -1,6 +1,7 @@
-const { app, BrowserWindow, ipcMain, session } = require('electron')
+const { app, BrowserWindow, ipcMain, session, dialog, Notification } = require('electron')
 const { spawn } = require('node:child_process')
 const crypto = require('node:crypto')
+const fs = require('node:fs/promises')
 const net = require('node:net')
 const path = require('node:path')
 const { pathToFileURL } = require('node:url')
@@ -12,6 +13,9 @@ let mainWindow
 let projectBarWindow
 let backendProcess
 let apiPort
+let notificationTimer
+const shownNotifications = new Set()
+const EXPORT_PATH = /^\/api\/v1\/(?:reports\/(?:staff|finance)\/[a-z0-9-]+\/export\.(?:xlsx|pdf)|payroll-periods\/[0-9a-f-]+\/export\.(?:xlsx|pdf)|exports\/[a-z0-9-]+(?:\/pdf)?|work-logs\/import-template|imports\/templates\/[a-z0-9-]+)(?:\?[a-zA-Z0-9_=&%.-]*)?$/
 
 function apiOrigin() {
   if (!apiPort) throw new Error('Yerel veri hizmeti portu hazır değil.')
@@ -36,7 +40,7 @@ function isTrustedRendererUrl(frameUrl) {
     try { return new URL(frameUrl).origin === new URL(process.env.VITE_DEV_SERVER_URL).origin } catch { return false }
   }
   const rendererRoot = pathToFileURL(path.join(__dirname, '..', 'frontend', 'dist')).href
-  return frameUrl.startsWith(rendererRoot)
+  return frameUrl.startsWith(`${rendererRoot}/`)
 }
 
 function isTrustedSender(event) {
@@ -100,6 +104,94 @@ function validateApiRequest(request) {
   }
   return { method, path: request.path }
 }
+
+function safeRoute(source) {
+  if (!source || typeof source !== 'object') return '/'
+  const id = (value) => typeof value === 'string' && /^[a-zA-Z0-9-]+$/.test(value) ? value : ''
+  const entity = source.entity
+  if (entity === 'receivable_schedule' || entity === 'customer') return `/musteriler${id(source.customer_id || source.entity_id) ? `?customer=${id(source.customer_id || source.entity_id)}` : ''}`
+  if (entity === 'purchase' || entity === 'supplier') return `/firmalar${id(source.supplier_id) ? `?supplier=${id(source.supplier_id)}` : ''}`
+  if (entity === 'employee_financial_movement' || entity === 'employee' || entity === 'leave_request') return `/personel${id(source.employee_id) ? `?employee=${id(source.employee_id)}` : ''}`
+  if (entity === 'project_task' || entity === 'project_visit' || entity === 'project') return `/projeler${id(source.project_id) ? `?project=${id(source.project_id)}` : ''}`
+  return '/takvim'
+}
+
+async function pollNotifications() {
+  if (!apiPort || !Notification.isSupported()) return
+  try {
+    const response = await fetch(`${apiOrigin()}/api/v1/notifications/due`, { headers: { 'x-ks-sidecar-token': SIDECAR_TOKEN }, signal: AbortSignal.timeout(8000) })
+    if (!response.ok) return
+    const payload = await response.json()
+    for (const item of payload.notifications || []) {
+      if (typeof item.delivery_key !== 'string' || shownNotifications.has(item.delivery_key)) continue
+      shownNotifications.add(item.delivery_key)
+      const notice = new Notification({ title: String(item.title || 'Hatırlatma'), body: String(item.body || '') })
+      notice.on('click', () => {
+        if (!mainWindow || mainWindow.isDestroyed()) createWindow()
+        mainWindow.show()
+        mainWindow.focus()
+        mainWindow.webContents.send('app:navigate', safeRoute(item.event?.source_route))
+      })
+      notice.show()
+      const delivered = await fetch(`${apiOrigin()}/api/v1/notifications/delivered`, {
+        method: 'POST', headers: { 'content-type': 'application/json', 'x-ks-sidecar-token': SIDECAR_TOKEN },
+        body: JSON.stringify({ delivery_key: item.delivery_key }), signal: AbortSignal.timeout(8000),
+      })
+      if (!delivered.ok) shownNotifications.delete(item.delivery_key)
+    }
+  } catch { /* Sidecar unavailable: next bounded poll will retry. */ }
+}
+
+ipcMain.handle('api:download', async (event, request) => {
+  if (!isTrustedSender(event)) throw new Error('Güvenilmeyen renderer isteği reddedildi.')
+  if (!request || request.method && request.method !== 'GET' || typeof request.path !== 'string' || !EXPORT_PATH.test(request.path)) throw new Error('İzin verilmeyen dışa aktarma yolu.')
+  const extension = request.path.split('?')[0].endsWith('.pdf') || request.path.split('?')[0].endsWith('/pdf') ? 'pdf' : 'xlsx'
+  const filename = typeof request.filename === 'string' && /^[\p{L}\p{N} _.-]{1,100}$/u.test(request.filename) ? request.filename.replace(/\.(xlsx|pdf)$/i, '') : 'Rapor'
+  try {
+    const response = await fetch(`${apiOrigin()}${request.path}`, { headers: { 'x-ks-sidecar-token': SIDECAR_TOKEN }, signal: AbortSignal.timeout(30000) })
+    if (!response.ok) {
+      const payload = await response.json().catch(() => null)
+      return { status: 'error', message: payload?.error?.message || `Rapor alınamadı (${response.status}).` }
+    }
+    const contentType = response.headers.get('content-type')?.split(';')[0]?.trim()
+    const isTemplate = /\/import-template$|\/imports\/templates\//.test(request.path)
+    if (isTemplate) {
+      if (contentType !== 'application/json') return { status: 'error', message: 'Şablon yanıtı geçersiz.' }
+      const payload = await response.json()
+      if (payload.mime_type !== 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' || typeof payload.content_base64 !== 'string' || payload.content_base64.length > 12_000_000) return { status: 'error', message: 'Şablon içeriği geçersiz.' }
+      const bytes = Buffer.from(payload.content_base64, 'base64')
+      if (bytes.subarray(0, 2).toString() !== 'PK') return { status: 'error', message: 'Excel şablonu geçersiz.' }
+      const choice = await dialog.showSaveDialog(mainWindow, { defaultPath: `${filename}.xlsx`, filters: [{ name: 'XLSX', extensions: ['xlsx'] }] })
+      if (choice.canceled || !choice.filePath) return { status: 'cancelled' }
+      if (path.extname(choice.filePath).toLowerCase() !== '.xlsx') return { status: 'error', message: 'Excel uzantısı geçersiz.' }
+      await fs.writeFile(choice.filePath, bytes)
+      return { status: 'saved' }
+    }
+    const expected = extension === 'pdf' ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    if (contentType !== expected) return { status: 'error', message: 'Rapor dosya türü beklenen biçimde değil.' }
+    const bytes = Buffer.from(await response.arrayBuffer())
+    if (extension === 'pdf' && bytes.subarray(0, 5).toString() !== '%PDF-') return { status: 'error', message: 'PDF içeriği geçersiz.' }
+    if (extension === 'xlsx' && bytes.subarray(0, 2).toString() !== 'PK') return { status: 'error', message: 'Excel içeriği geçersiz.' }
+    const choice = await dialog.showSaveDialog(mainWindow, { defaultPath: `${filename}.${extension}`, filters: [{ name: extension.toUpperCase(), extensions: [extension] }] })
+    if (choice.canceled || !choice.filePath) return { status: 'cancelled' }
+    if (path.extname(choice.filePath).toLowerCase() !== `.${extension}`) return { status: 'error', message: 'Dosya uzantısı geçersiz.' }
+    await fs.writeFile(choice.filePath, bytes, { flag: 'w' })
+    return { status: 'saved' }
+  } catch (error) { return { status: 'error', message: `Dosya kaydedilemedi: ${String(error)}` } }
+})
+
+ipcMain.handle('api:read-spreadsheet', async (event) => {
+  if (!isTrustedSender(event)) throw new Error('Güvenilmeyen renderer isteği reddedildi.')
+  const choice = await dialog.showOpenDialog(mainWindow, { properties: ['openFile'], filters: [{ name: 'XLSX', extensions: ['xlsx'] }] })
+  if (choice.canceled || choice.filePaths.length !== 1) return { status: 'cancelled' }
+  const filePath = choice.filePaths[0]
+  if (path.extname(filePath).toLowerCase() !== '.xlsx') return { status: 'error', message: 'Yalnız XLSX dosyası seçilebilir.' }
+  const stat = await fs.stat(filePath)
+  if (stat.size > 8 * 1024 * 1024) return { status: 'error', message: 'Dosya 8 MB sınırını aşıyor.' }
+  const bytes = await fs.readFile(filePath)
+  if (bytes.subarray(0, 2).toString() !== 'PK') return { status: 'error', message: 'Geçersiz Excel dosyası.' }
+  return { status: 'selected', file_name: path.basename(filePath), content_base64: bytes.toString('base64') }
+})
 
 ipcMain.handle('api:request', async (event, request) => {
   if (!isTrustedSender(event)) throw new Error('Güvenilmeyen renderer isteği reddedildi.')
@@ -276,12 +368,14 @@ app.whenReady().then(async () => {
   await waitForBackend()
   createWindow()
   createProjectBar()
+  await pollNotifications()
+  notificationTimer = setInterval(pollNotifications, 15 * 60 * 1000)
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
 })
 
-app.on('before-quit', stopBackend)
+app.on('before-quit', () => { if (notificationTimer) clearInterval(notificationTimer); stopBackend() })
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })

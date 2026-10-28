@@ -3,12 +3,14 @@ import type { ApiErrorShape } from './types'
 export class ApiError extends Error {
   status: number
   code: string
+  details: unknown
 
-  constructor(message: string, status = 0, code = 'unknown_error') {
+  constructor(message: string, status = 0, code = 'unknown_error', details: unknown = null) {
     super(message)
     this.name = 'ApiError'
     this.status = status
     this.code = code
+    this.details = details
   }
 }
 
@@ -31,6 +33,7 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
       payload?.error?.message ?? 'İşlem tamamlanamadı.',
       response.status,
       payload?.error?.code ?? 'request_failed',
+      payload?.error?.details,
     )
   }
 

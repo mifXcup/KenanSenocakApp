@@ -116,3 +116,21 @@ Model kodu işlem kayıtlarını değiştiremez ve hiçbir veriyi dış servise 
 - İçe aktarma commit'i öncesinde SQLite online `pre_import` yedeği alınır. Hatalı tek satır varsa hiçbir kayıt yazılmaz.
 - XLSX ve PDF çıktıları backend tarafından bellekte üretilir; geçici rapor dosyası kullanıcı veri dizinine bırakılmaz.
 
+
+## P0 backend modül haritası (WP-B1 – WP-B4)
+
+| Modül | Sorumluluk |
+| --- | --- |
+| `clock.py` | Tek iş tarihi kaynağı (`business_today`); testler sabitler, UI açıkça tarih gönderir |
+| `customers.py` | Müşteri kartı, alacak planı, değişmez cari defter, tahsilat dağıtımı, yaşlandırma, proje kovaları |
+| `project_finance.py` | Bütçe satırları/revizyon, ek iş, yaşam döngüsü, maliyet kaynakları, manuel tahmin, kârlılık, drilldown |
+| `receipts.py` | Satın alma teslim fişleri; `received_kurus` ve yaşam döngüsü senkronu; `quantity_over_received` uyarısı |
+| `supplier_ledger.py` | Tedarikçi ekstresi ve yaşlandırma |
+| `attendance.py` / `leave.py` | Devam ayarları, tatil, haftalık plan, zorunlu gün, maaş vadesi / izin türleri, hak defteri, talepler |
+| `calendar_api.py` | Kaynaklardan takvim projeksiyonu, manuel olay ve tekrar, Bugün, bildirim teslim kaydı |
+| `finance_reports.py` | Proje/müşteri/tedarikçi/nakit/personel/malzeme raporları (ReportTable, JSON-XLSX-PDF) |
+| `savings.py` | Salt okunur, açıklanabilir tasarruf/risk fırsatları |
+| `ml.py` | Altı yerel model; hiçbiri otomatik işlem yapmaz |
+
+İlkeler: finansal kayıtlar silinmez (ters kayıt/iptal + audit); projeksiyonlar kaynak kayıtlardan her istekte üretilir (kopya tablo yok);
+raporlar tek üreticiden üç biçime çıkar; sidecar token modeli ve yerel tek kullanıcı SQLite yapısı değişmedi.

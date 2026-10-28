@@ -9,12 +9,14 @@ from fastapi import APIRouter, Depends, Query
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .api import ApiError, add_audit, require_active, require_sidecar_token
 from .backup import backup_manager
 from .database import get_session
 from .labor_cost import (
+    NEUTRAL_STATUSES,
     SETTING_DEFAULTS,
     UNPAID_STATUSES,
     WORK_STATUSES,
@@ -98,10 +100,12 @@ def resolve_work_log_values(
         normal, overtime = normalize_hours(status, normal_hours, overtime_hours, settings)
     except HoursError as exc:
         raise ApiError("invalid_hours", str(exc), 422) from exc
-    if status in UNPAID_STATUSES:
+    if status in UNPAID_STATUSES or status in NEUTRAL_STATUSES:
         if manual_amount:
             raise ApiError(
-                "invalid_amount", "Ücretsiz izin ve devamsızlık maliyeti sıfır olmalıdır.", 422
+                "invalid_amount",
+                "Ücretsiz izin, devamsızlık ve haftalık izin maliyeti sıfır olmalıdır.",
+                422,
             )
         calculated: int | None = 0
         manual_amount = None
@@ -140,6 +144,29 @@ def ensure_project_site(
     if site_id:
         site = require_active(session, Site, site_id, "Şantiye")
         validate_site_project(site, project_id)
+
+
+def reject_leave_managed(work_log: WorkLog) -> None:
+    if work_log.leave_request_id:
+        raise ApiError(
+            "leave_managed",
+            "Bu kayıt onaylı izin talebinden üretildi; izin talebi üzerinden değiştirin veya iptal edin.",
+            409,
+            {"leave_request_id": work_log.leave_request_id},
+        )
+
+
+def commit_work_log(session: Session) -> None:
+    """Veritabanı düzeyindeki tekil aktif puantaj kısıtı yarışta da aynı hata koduyla döner."""
+    try:
+        session.commit()
+    except IntegrityError as exc:
+        session.rollback()
+        raise ApiError(
+            "duplicate_work_log",
+            "Bu personel için aynı güne ait çalışma kaydı zaten var.",
+            409,
+        ) from exc
 
 
 def ensure_no_duplicate(
@@ -193,7 +220,7 @@ def create_work_log(payload: WorkLogCreate, session: Session = Depends(get_sessi
         "created",
         {"amount_kurus": work_log.amount_kurus, "work_status": work_log.work_status},
     )
-    session.commit()
+    commit_work_log(session)
     session.refresh(work_log)
     return work_log
 
@@ -238,6 +265,7 @@ def update_work_log(
     work_log_id: str, payload: WorkLogUpdate, session: Session = Depends(get_session)
 ) -> WorkLog:
     work_log = require_active(session, WorkLog, work_log_id, "Çalışma kaydı")
+    reject_leave_managed(work_log)
     changes = payload.model_dump(exclude_unset=True)
     work_date = changes.get("work_date", work_log.work_date)
     status = changes.get("work_status", work_log.work_status)
@@ -299,7 +327,7 @@ def update_work_log(
             },
         },
     )
-    session.commit()
+    commit_work_log(session)
     session.refresh(work_log)
     return work_log
 
@@ -307,6 +335,7 @@ def update_work_log(
 @router.post("/work-logs/{work_log_id}/cancel", response_model=WorkLogRead)
 def cancel_work_log(work_log_id: str, session: Session = Depends(get_session)) -> WorkLog:
     work_log = require_active(session, WorkLog, work_log_id, "Çalışma kaydı")
+    reject_leave_managed(work_log)
     assert_dates_unlocked(session, [work_log.work_date], "Çalışma kaydı")
     work_log.status = RecordStatus.CANCELLED
     add_audit(session, "work_log", work_log.id, "cancelled", {"amount_kurus": work_log.amount_kurus})

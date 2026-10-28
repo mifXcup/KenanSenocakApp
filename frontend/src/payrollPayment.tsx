@@ -1,0 +1,19 @@
+import { useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { apiRequest, formatMoney, makeIdempotencyKey, toKurus } from './lib/api'
+import type { PayrollEntry } from './lib/types'
+import { Button, ErrorState, LoadingRows } from './components/ui'
+
+const day = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Istanbul', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
+export function PayrollPayment({ periodId, entries, locked }: { periodId: string; entries: PayrollEntry[]; locked: boolean }) {
+  const client = useQueryClient()
+  const [employeeId, setEmployeeId] = useState('')
+  const [amount, setAmount] = useState('')
+  const [date, setDate] = useState(day())
+  const [message, setMessage] = useState('')
+  const due = useQuery({ queryKey: ['salary-due', periodId], queryFn: () => apiRequest<{ employees: Array<{ employee_id: string; employee_name: string; due_date: string }> }>(`/api/v1/payroll-periods/${periodId}/salary-due-dates`) })
+  const movements = useQuery({ queryKey: ['payroll-movements', periodId], queryFn: () => apiRequest<Array<{ id: string; employee_id: string; movement_date: string; movement_type: string; amount_kurus: number; status: string }>>(`/api/v1/employee-finance/movements?payroll_period_id=${periodId}`) })
+  async function pay() { try { setMessage(''); await apiRequest('/api/v1/employee-finance/movements', { method: 'POST', body: { employee_id: employeeId, payroll_period_id: periodId, movement_date: date, movement_type: 'payroll_payment', amount_kurus: toKurus(amount), idempotency_key: makeIdempotencyKey('payroll-payment') } }); await client.invalidateQueries(); setAmount(''); setMessage('Ödeme kaydedildi.') } catch (e) { setMessage(e instanceof Error ? e.message : String(e)) } }
+  async function reverse(id: string) { try { setMessage(''); await apiRequest(`/api/v1/employee-finance/movements/${id}/reverse`, { method: 'POST', body: { movement_date: day() } }); await client.invalidateQueries(); setMessage('Ters kayıt oluşturuldu.') } catch (e) { setMessage(e instanceof Error ? e.message : String(e)) } }
+  return <section className="panel p0-section"><h2>Vade ve ödemeler</h2>{due.isLoading ? <LoadingRows /> : due.error ? <ErrorState error={due.error} onRetry={() => due.refetch()} /> : due.data?.employees.map((item) => <div className="p0-row" key={item.employee_id}><strong>{item.employee_name}</strong><span>Vade {item.due_date}</span><span>Kalan {formatMoney(entries.find((entry) => entry.employee_id === item.employee_id)?.remaining_kurus)}</span></div>)}{!locked && <p>Ödeme için kesinleşmiş ve açık dönem gerekir.</p>}{locked && <form className="p0-controls" onSubmit={(e) => { e.preventDefault(); pay() }}><label>Personel<select required value={employeeId} onChange={(e) => setEmployeeId(e.target.value)}><option value="">Seçin</option>{entries.filter((entry) => entry.remaining_kurus > 0).map((entry) => <option key={entry.employee_id} value={entry.employee_id}>{entry.employee_name || entry.employee_id} · {formatMoney(entry.remaining_kurus)}</option>)}</select></label><label>Ödeme tarihi<input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></label><label>Tutar TL<input required value={amount} onChange={(e) => setAmount(e.target.value)} /></label><Button variant="primary" disabled={!employeeId || !amount}>Ödeme kaydet</Button></form>}{movements.data?.filter((item) => item.movement_type === 'payroll_payment').map((item) => <div className="p0-row" key={item.id}><span>{item.movement_date}</span><strong>{entries.find((entry) => entry.employee_id === item.employee_id)?.employee_name}</strong><span>{formatMoney(item.amount_kurus)}</span>{locked && item.status === 'active' && <Button onClick={() => reverse(item.id)}>Ters kayıt</Button>}</div>)}{message && <p role="status">{message}</p>}</section>
+}
