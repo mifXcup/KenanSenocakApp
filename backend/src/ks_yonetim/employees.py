@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from . import clock
 from .api import ApiError, add_audit, require_sidecar_token
 from .database import get_session
 from .locks import assert_range_unlocked
@@ -35,7 +36,7 @@ def serialize_employees(
     session: Session, employees: list[Employee], today: date | None = None
 ) -> list[EmployeeRead]:
     """Güncel ücret alanlarını bugün geçerli ücret kaydından türetir (tek sorgu)."""
-    day = today or date.today()
+    day = today or clock.business_today()
     book = load_rate_book(session, [employee.id for employee in employees])
     output: list[EmployeeRead] = []
     for employee in employees:
@@ -72,10 +73,10 @@ def create_employee(payload: EmployeeCreate, session: Session = Depends(get_sess
                 rate_kurus=payload.current_rate_kurus,
                 reason="Personel kartı açılışı",
             ),
-            date.today(),
+            clock.business_today(),
         )
         employee.current_rate_kurus = rate.rate_kurus
-        sync_employee_rate_cache(employee, load_rate_book(session, [employee.id]), date.today())
+        sync_employee_rate_cache(employee, load_rate_book(session, [employee.id]), clock.business_today())
     session.commit()
     session.refresh(employee)
     return serialize_employee(session, employee)
@@ -162,7 +163,7 @@ def create_wage_rate(
     employee_id: str, payload: WageRateCreate, session: Session = Depends(get_session)
 ):
     employee = get_employee(session, employee_id, allow_archived=False)
-    rate = add_wage_rate(session, employee, payload, date.today())
+    rate = add_wage_rate(session, employee, payload, clock.business_today())
     session.commit()
     session.refresh(rate)
     return rate
@@ -182,7 +183,7 @@ def cancel_wage_rate(employee_id: str, rate_id: str, session: Session = Depends(
     rate.status = RecordStatus.CANCELLED
     add_audit(session, "employee_wage_rate", rate.id, "cancelled")
     session.flush()
-    sync_employee_rate_cache(employee, load_rate_book(session, [employee.id]), date.today())
+    sync_employee_rate_cache(employee, load_rate_book(session, [employee.id]), clock.business_today())
     session.commit()
     session.refresh(rate)
     return rate

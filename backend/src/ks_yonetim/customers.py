@@ -1222,3 +1222,111 @@ def cancel_allocation(
     session.commit()
     session.refresh(allocation)
     return allocation
+
+
+# --- Proje bazlı ayrıştırma (kârlılık ve avans raporları) ---------------------------------------
+
+
+def customer_buckets(
+    session: Session, customer_id: str, as_of: date | None = None
+) -> dict[str | None, dict[str, int]]:
+    """Müşteri hareketlerini proje kovalarına ayırır (`None` = bağlantısız).
+
+    Tahakkuk/açılış/iade/artıran düzeltme kendi `project_id` kovasına yazılır. Tahsilat, plana dağıtılan
+    kısmında o planın projesine, kalanında kendi `project_id` kovasına yazılır; böylece proje kârlılığı
+    yalnız projeye bağlı veya o projenin planlarına dağıtılmış tahsilatı kullanır.
+    """
+    rows = effective_rows(_active_rows(session, customer_id, as_of=as_of))
+    allocations: dict[str, list[tuple[str | None, int]]] = defaultdict(list)
+    plan_project = dict(
+        session.execute(
+            select(ReceivableSchedule.id, ReceivableSchedule.project_id).where(
+                ReceivableSchedule.customer_id == customer_id
+            )
+        ).all()
+    )
+    allocation_query = select(CustomerPaymentAllocation).where(
+        CustomerPaymentAllocation.customer_id == customer_id,
+        CustomerPaymentAllocation.status == RecordStatus.ACTIVE,
+    )
+    if as_of is not None:
+        allocation_query = allocation_query.where(CustomerPaymentAllocation.allocation_date <= as_of)
+    for allocation in session.scalars(allocation_query):
+        allocations[allocation.collection_id].append(
+            (plan_project.get(allocation.receivable_schedule_id), allocation.amount_kurus)
+        )
+    buckets: dict[str | None, dict[str, int]] = defaultdict(
+        lambda: {"increase_kurus": 0, "collected_kurus": 0, "refunded_kurus": 0, "decrease_kurus": 0}
+    )
+    for row in rows:
+        amount = row.amount_kurus
+        if row.movement_type == "collection":
+            allocated = 0
+            for project_id, part in allocations.get(row.id, []):
+                target = project_id if project_id is not None else row.project_id
+                buckets[target]["collected_kurus"] += part
+                buckets[target]["decrease_kurus"] += part
+                allocated += part
+            rest = amount - allocated
+            if rest > 0:
+                buckets[row.project_id]["collected_kurus"] += rest
+                buckets[row.project_id]["decrease_kurus"] += rest
+        elif row.movement_type == "refund":
+            buckets[row.project_id]["refunded_kurus"] += amount
+            buckets[row.project_id]["increase_kurus"] += amount
+        elif row.direction == INCREASE:
+            buckets[row.project_id]["increase_kurus"] += amount
+        else:
+            buckets[row.project_id]["decrease_kurus"] += amount
+    for bucket in buckets.values():
+        net = bucket["increase_kurus"] - bucket["decrease_kurus"]
+        bucket["net_kurus"] = net
+        bucket["receivable_kurus"] = max(net, 0)
+        bucket["advance_kurus"] = max(-net, 0)
+    return dict(buckets)
+
+
+def advance_split(buckets: dict[str | None, dict[str, int]]) -> dict[str, int]:
+    """Projeye bağlı ve bağlantısız müşteri avansı ayrı toplanır."""
+    return {
+        "project_advance_kurus": sum(b["advance_kurus"] for p, b in buckets.items() if p is not None),
+        "unlinked_advance_kurus": buckets.get(None, {}).get("advance_kurus", 0),
+    }
+
+
+def project_collection_summary(session: Session, project: Project, as_of: date | None = None) -> dict:
+    """Projenin tahsilat özeti ve bağlantısız avans uyarısı (proje müşteri kartına bağlı olmalıdır)."""
+    if project.customer_id is None:
+        return {"collections": None, "warnings": []}
+    buckets = customer_buckets(session, project.customer_id, as_of)
+    mine = buckets.get(project.id) or {
+        "increase_kurus": 0, "collected_kurus": 0, "refunded_kurus": 0, "decrease_kurus": 0,
+        "net_kurus": 0, "receivable_kurus": 0, "advance_kurus": 0,
+    }
+    split = advance_split(buckets)
+    warnings = []
+    if split["unlinked_advance_kurus"] > 0:
+        warnings.append(
+            {
+                "code": "unlinked_customer_advance",
+                "customer_id": project.customer_id,
+                "amount_kurus": split["unlinked_advance_kurus"],
+                "message": (
+                    "Müşterinin projeye bağlanmamış avansı var; bu tutar proje tahsilatına "
+                    "sayılmaz. Tahsilatı projeye bağlayın veya projenin alacak planına dağıtın."
+                ),
+            }
+        )
+    return {
+        "collections": {
+            "collected_kurus": mine["collected_kurus"],
+            "refunded_kurus": mine["refunded_kurus"],
+            "net_collected_kurus": mine["collected_kurus"] - mine["refunded_kurus"],
+            "billed_kurus": mine["increase_kurus"] - mine["refunded_kurus"],
+            "open_receivable_kurus": mine["receivable_kurus"],
+            "project_advance_kurus": mine["advance_kurus"],
+            "unlinked_customer_advance_kurus": split["unlinked_advance_kurus"],
+            "basis": "project_linked_or_allocated_to_project_schedules",
+        },
+        "warnings": warnings,
+    }

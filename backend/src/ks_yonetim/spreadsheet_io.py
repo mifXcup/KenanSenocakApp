@@ -382,26 +382,26 @@ def export_xlsx(kind: str, session: Session = Depends(get_session)) -> Spreadshe
                 [item.name, item.default_unit, item.tracking_mode.value, item.note, item.status.value]
             )
     elif kind == "purchases":
+        from .finance_reports import purchase_lifecycle_table
+
+        table = purchase_lifecycle_table(session)
         sheet.title = "Satın Almalar"
-        sheet.append(["Tarih", "Vade", "Firma", "Malzeme", "Tutar (TL)", "Açıklama"])
-        rows = session.execute(
-            select(Purchase, Supplier.name, Material.name)
-            .join(Supplier, Supplier.id == Purchase.supplier_id)
-            .join(Material, Material.id == Purchase.material_id)
-            .where(Purchase.status == RecordStatus.ACTIVE)
-            .order_by(Purchase.purchase_date)
-        )
-        for purchase, supplier_name, material_name in rows:
+        sheet.append([c.label + (" (TL)" if c.kind == "money" else "") for c in table.columns])
+        for row in table.rows:
             sheet.append(
                 [
-                    purchase.purchase_date,
-                    purchase.due_date,
-                    supplier_name,
-                    material_name,
-                    purchase.total_kurus / 100,
-                    purchase.description,
+                    row[c.key] / 100 if c.kind == "money" and row[c.key] is not None else row[c.key]
+                    for c in table.columns
                 ]
             )
+        sheet.append(
+            [
+                "TOPLAM" if index == 0 else (table.totals[c.key] / 100 if c.key in table.totals else None)
+                for index, c in enumerate(table.columns)
+            ]
+        )
+        for line in table.footnotes():
+            sheet.append([line])
     elif kind == "project-costs":
         sheet.title = "Proje Maliyetleri"
         sheet.append(["Proje", "Müşteri", "Satın Alma (TL)", "İşçilik (TL)", "Diğer Gider (TL)", "Toplam (TL)", "Bütçe (TL)"])

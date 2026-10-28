@@ -761,3 +761,136 @@ yapılmış olayın `start_date`/`repeat_rule` değeri değiştirilemez (`event_
   }]
 }
 ```
+
+
+## P0 / WP-B4 — Raporlar, ML, tasarruf analizi ve final kapısı
+
+Bu bölüm B1–B3 sözleşmesini kırmaz; alanlar eklemedir. Bilinen kırıcı davranış değişiklikleri sonda listelenir.
+İş tarihi her yerde `clock.business_today`'dir (tarih verilmeyen `as_of` dahil). Para alanları kuruş (integer).
+
+### Rapor ailesi — `/reports/finance`
+
+JSON, XLSX ve PDF aynı `ReportTable` üreticisinden çıkar: satır sayısı ve toplamlar üç biçimde aynıdır. Yanıt:
+`name`, `title`, `filters`, `columns[{key,label,kind}]`, `rows`, `totals`, `row_count`, **`notes`** (yöntem/kapsam
+açıklamaları) ve **`warnings`** (yapılandırılmış uyarılar; `code`, `message`, ilgili kimlikler). XLSX ve PDF `notes` ile
+`warnings[].message` değerlerini tablonun altına yazar. Mevcut `/reports/staff/*` aileleri `notes`/`warnings` alanlarını boş
+liste olarak taşır (additive).
+
+| Method | Yol | Amaç |
+| --- | --- | --- |
+| GET | `/reports/finance` | Rapor listesi |
+| GET | `/reports/finance/{name}` | JSON (`limit` 1–2000, `offset`; toplamlar tüm satırlardan) |
+| GET | `/reports/finance/{name}/export.xlsx` | XLSX (ham dosya) |
+| GET | `/reports/finance/{name}/export.pdf` | PDF (ham dosya) |
+
+Ortak filtreler: `date_from`, `date_to` (`date_to` aynı zamanda `as_of`'tur), `project_id`, `customer_id`, `supplier_id`,
+`employee_id`, `material_id`, `site_id`, `horizon_days` (1–365). Dosya çıktısı en fazla 20.000 satırdır (`too_many_rows`).
+
+| Rapor `name` | İçerik |
+| --- | --- |
+| `project-profitability` | Sözleşme, onaylı ek iş, revize sözleşme, gerçekleşen, taahhüt, kalan tahmin, tahmini bitiş maliyeti, tahmini kâr/marj, projeye bağlı net tahsilat ve açık alacak; bağlantısız avans uyarısı |
+| `budget-variance` | Proje × kategori: ilk bütçe, revize bütçe, gerçekleşen, taahhüt, kalan tahmin, tahmini bitiş, sapma (₺ ve %), tahmin kaynağı (`auto`/`manual`) |
+| `project-comparison` | Projeler arası kârlılık sıralaması (`rank`, tahmini marj, maliyet payı %) |
+| `customer-aging` | Müşteri alacak yaşlandırması; avans (projeye bağlı / bağlantısız) gecikmiş alacaktan ayrı sütunlarda |
+| `customer-advances` | Müşteri avansları: `Projeye bağlı` ve `Bağlantısız` satırlar; `project_advance_kurus` / `unlinked_advance_kurus` toplamları |
+| `supplier-aging` | Tedarikçi borç yaşlandırması (teslim fişlerine göre) ve tedarikçi avansı |
+| `customer-statement` | `customer_id` zorunlu (`customer_required`, 422); yürüyen bakiye, hükümsüz satırlar işaretli |
+| `supplier-statement` | `supplier_id` zorunlu (`supplier_required`, 422); teslim, ödeme, ödeme ters kaydı |
+| `cash-forecast-13w` | 13 haftalık **planlı giriş, planlı çıkış ve net değişim** (+ kümülatif net değişim). Banka/kasa bakiyesi içermez |
+| `upcoming-schedule` | Gecikmiş ve `horizon_days` içindeki açık tahsilat/ödeme/maaş vadeleri |
+| `staff-balances` | Personel kalan maaş ödemesi, şirket borcu, açık avans, personel borcu, net pozisyon |
+| `attendance-overtime-leave` | Çalışılan gün, normal/fazla mesai saat ve oran, yıllık/raporlu/mazeret izin saati, devamsızlık, eksik zorunlu gün (varsayılan son 30 gün) |
+| `labor-cost` | Proje × şantiye işçilik tahakkuku (saat ve tutar) |
+| `material-price-history` | Teslim bazlı birim fiyat geçmişi ve önceki alıma göre değişim % |
+| `waste-rework-cost` | Fire (malzeme hareketi) ve yeniden işleme gideri; birbirine eklenmez |
+| `purchase-lifecycle` | Satın alma listesi: planlı / sipariş / kısmen / teslim ayrı; yalnız teslim alınan tutar gerçektir |
+
+13 haftalık rapor kuralları: 13 haftalık pencere `as_of` gününde başlar (hafta 1 = `as_of … as_of+6`). Vadesi geçmiş ve
+ödenmemiş tutarlar `week_no = 0` "Vadesi geçmiş (devreden)" satırındadır. Planlı giriş = vadeli alacak planlarının açık kalanı;
+planlı çıkış = vadeli tedarikçi borcu kalanı + maaş/personel ödemesi kalanı. Vadesi girilmemiş açık alacak rapora dahil
+değildir ve notlarda tutarı belirtilir. Sütun, anahtar ve notlarda bakiye iddiası yoktur.
+
+### Devir maddeleri
+
+1. **Satın alma dışa aktarımları yaşam döngüsüne uyarlandı.** `GET /exports/purchases` (XLSX) ve `GET /exports/purchases/pdf`
+   artık `purchase-lifecycle` tablosundan üretilir: `Durum`, `Sipariş tutarı`, `Teslim alınan (gerçek)`, `Bekleyen taahhüt`,
+   `Uyarı`. TOPLAM satırı yalnız teslim alınan ve bekleyen taahhüdü toplar; sipariş tutarı toplanmaz. Planlı/siparişli kayıt
+   gerçek maliyet gibi toplanmaz.
+2. **`quantity_over_received` uyarısı.** Toplam teslim miktarı satın alma miktarını aşarsa işlem engellenmez; `POST
+   /purchases/{id}/receipts`, `GET /purchases/{id}/receipts`, `POST /purchase-receipts/{id}/cancel` ve
+   `POST /purchases/{id}/lifecycle` yanıtlarında `warnings[]` döner: `code`, `message`, `purchase_quantity`,
+   `received_quantity`, `excess_quantity`. Aynı uyarı `purchase-lifecycle` raporunda satır `warning` sütununda ve rapor
+   `warnings` listesindedir.
+3. **Müşteri avansı proje ayrımı.** Müşteri hareketleri proje kovalarına ayrılır: tahakkuk/açılış/iade/artıran düzeltme kendi
+   `project_id` kovasına; tahsilat plana dağıtılan kısmında o planın projesine, kalanında kendi `project_id` kovasına yazılır.
+   Kova bakiyesi negatifse o kova avansıdır: `project_advance_kurus` (projeye bağlı kovalar toplamı) ve
+   `unlinked_advance_kurus` (`project_id` boş kova). Müşteri düzeyindeki `credit_kurus` (B1.1) tek net bakiyedir ve değişmedi;
+   bu nedenle bir müşteride hem alacak hem bağlantısız avans bulunabilir.
+
+`GET /projects/{id}/profitability` yanıtına eklenenler: `collections` (`collected_kurus`, `refunded_kurus`,
+`net_collected_kurus`, `billed_kurus`, `open_receivable_kurus`, `project_advance_kurus`,
+`unlinked_customer_advance_kurus`, `basis`) ve `warnings[]` (`unlinked_customer_advance`: `customer_id`, `amount_kurus`,
+`message`). Tahsilat yalnız projeye bağlı veya o projenin planlarına dağıtılmış tutarı sayar; bağlantısız avans sayılmaz ve
+uyarı döner. Kâr hesabı sözleşme ve maliyete dayanır, tahsilattan etkilenmez.
+
+### Yerel ML (altı model korundu, additive)
+
+Modeller: `price_anomaly`, `reorder`, `project_budget_risk`, `supplier_price_comparison`, `payroll_load`,
+`employee_debt_risk`. Run, history (`/runs`), `/predictions`, `/predictions/{id}/feedback`, `/evaluate` aynıdır.
+
+- `GET /analytics/ml/insights` yanıtına `models[]` eklendi: `model_name`, `model_version`, `ready`, `prediction_count`,
+  `sample_count`, `confidence` (ortalama güven), `requirement`, `message`; `read_only: true`, `automatic_actions: []`.
+  Yetersiz veride `ready = false`, tahmin listeleri boş, `message = "Yetersiz veri: <gereksinim> gerekir; tahmin üretilmedi."`.
+- `GET /analytics/ml/status` model satırlarına `message`, `sample_count` (son çalıştırma), `confidence` (son çalıştırma
+  ortalaması), mevcut `model_version`, `last_run_at` eklendi; üst düzey `read_only` ve `automatic_actions`.
+- `POST /analytics/ml/run`: tahmin üretilmeyen modelde `metrics = {status: "insufficient_data", ready: false, message}`.
+- **`project_budget_risk`** tahmini bitiş maliyetini (`forecast_cost_at_completion_kurus`, kârlılıkla aynı hesap) esas alır.
+  Bütçe tabanı revize bütçedir (bütçe satırları varsa onların toplamı, yoksa proje bütçesi). `risk_level`: `high` →
+  tahmini bitiş maliyeti bütçeyi aşıyor veya 30 günlük trend bütçeyi aşıyor; `medium` → trend veya (gerçekleşen + taahhüt)
+  bütçenin %80'inde; aksi halde `low`. Yeni alanlar: `forecast_cost_at_completion_kurus`, `forecast_overrun_kurus`,
+  `forecast_usage_percent`, `commitment_kurus`, `forecast_source` (`manual` | `auto`), `budget_basis`
+  (`budget_lines` | `project_budget`). Maliyet olayları artık teslim fişlerinin tarih ve tutarlarıdır.
+- **`reorder`** stok kesinliği iddiasında bulunmaz: yanıtta `basis = "purchase_interval"`, `stock_claim = false` ve
+  `disclaimer` döner; tahmin yalnız geçmiş satın alma aralığından türetilir.
+- Hiçbir model otomatik sipariş, ödeme veya maaş hareketi oluşturmaz (`read_only`, `automatic_actions` boş).
+- Yalnız teslim edilmiş (`received`/`partially_received`) satın almalar fiyat ve yeniden alım modellerine girer.
+
+### Tasarruf / risk fırsatları — `GET /analytics/savings`
+
+Parametreler: `as_of`, `project_id`, `min_severity` (`low` | `medium` | `high`). Salt okunur; sonuç sıralaması önem sonra
+tahmini etkiye göredir. Yanıt: `as_of`, `read_only`, `automatic_actions`, `count`, `total_estimated_impact_kurus`, `by_type`,
+`by_severity`, `opportunities[]`.
+
+Fırsat alanları: `opportunity_id` (`type:key`, deterministik), `type`, `severity`, `title`, `reason` (açık Türkçe neden),
+`estimated_impact_kurus` (boş olabilir), `related_amount_kurus`, `confidence` (`high`|`medium`|`low`), `data_sufficiency`
+(`sample_count`, `minimum_samples`, `sufficient`), `sources[]` (`source_type`, `source_id`, `amount_kurus`), `deep_link`
+(`entity`, `entity_id`, `project_id`), `project_id` ve türe özgü alanlar.
+
+| `type` | Tetik | `estimated_impact_kurus` |
+| --- | --- | --- |
+| `budget_overrun` | Kategori tahmini bitiş maliyeti bütçeyi aşıyor | Aşım tutarı; kaynaklar bütçe satırları + gerçekleşen/taahhüt kalemleri (`role`) |
+| `price_anomaly` | Son birim fiyat beklenenin belirgin üstünde (anomali skoru ≥ 3) | (son fiyat − beklenen) × son alım miktarı |
+| `cheaper_supplier` | Karşılaştırılabilir malzemede net daha ucuz tedarikçi | Son 180 gün diğer tedarikçilerden teslim alınan tutar × tasarruf % |
+| `overtime_concentration` | Son 90 günde fazla mesai ≥ 20 saat ve ≥ %20 oran | Fazla mesai primi payı |
+| `rework_increase` | Fire + yeniden işleme son 90 gün, önceki 90 günün ≥ 1,5 katı | Artış tutarı |
+| `unlinked_expense` | Projeye bağlanmamış teslim alınmış satın alma / manuel işçilik | Boş; tutar `related_amount_kurus` |
+| `uncollected_change_order` | Onaylı ek işin müşteriye tahakkuk ettirilmeyen kısmı | Tahakkuk edilmeyen tutar (önem: onaydan geçen gün) |
+| `unlinked_customer_advance` | Bağlantısız müşteri avansı | Boş; tutar `related_amount_kurus` |
+
+Önem eşikleri: bütçe aşımı aşım/bütçe ≥ %20 yüksek, ≥ %5 orta; fiyat anomalisi skor ≥ 5 yüksek; tedarikçi farkı ≥ %15 yüksek,
+≥ %7 orta; fazla mesai oranı ≥ %35 yüksek; fire/yeniden işleme maliyet payı ≥ %10 yüksek, ≥ %3 orta; projesiz gider payı ≥ %25
+yüksek, ≥ %10 orta; ek iş yaşı > 30 gün yüksek, > 14 gün orta; avans payı ≥ %50 yüksek, ≥ %20 orta.
+
+### Diğer değişiklikler
+
+- PDF yazı tipi: Windows/Linux/macOS sistem yazı tipleri yoksa reportlab'in paketlediği Vera kullanılır (Türkçe harfleri kapsar);
+  `Helvetica` yalnız hiçbir yazı tipi bulunamazsa son çaredir. Para birimi `TL` olarak yazılır.
+- `ks_yonetim.clock.business_today` tek tarih kaynağıdır; personel ücreti sunumu, rapor ve ML `as_of` varsayılanları buna bağlandı.
+
+### Kırıcı olabilecek değişiklikler (Codex notu)
+
+1. `GET /exports/purchases` (XLSX) ve `/exports/purchases/pdf` sütunları değişti (Durum, Teslim alınan, Bekleyen taahhüt, Uyarı eklendi;
+   `Tutar` sütunu `Sipariş tutarı` oldu ve toplanmaz). Dosyayı sütun konumuyla okuyan istemci uyarlanmalıdır.
+2. `ProjectRisk` risk seviyesi artık tahmini bitiş maliyetinden etkilenir; aynı veriyle seviye daha yüksek çıkabilir. Bütçesi yalnız
+   bütçe satırlarıyla tanımlı projeler de riske dahil edilir.
+3. Teslim fişi/lifecycle yanıtlarında `warnings` alanı eklendi (boş liste olabilir); `ReportTable` JSON'una `notes`/`warnings` eklendi.

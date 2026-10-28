@@ -12,6 +12,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from . import clock
 from .backup import BackupError, backup_manager
 from .config import get_settings
 from .database import get_session
@@ -264,7 +265,7 @@ def purchases_report(
 def debt_aging_report(
     session: Session = Depends(get_session), as_of: date | None = None
 ) -> DebtAgingReport:
-    return debt_aging(session, as_of or date.today())
+    return debt_aging(session, as_of or clock.business_today())
 
 
 @router.post(

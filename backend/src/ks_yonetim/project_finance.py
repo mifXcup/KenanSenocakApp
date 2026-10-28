@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 
 from . import clock
 from .api import ApiError, add_audit, cancel_purchase, require_active, require_sidecar_token
+from .customers import project_collection_summary
 from .database import get_session
 from .models import (
     CustomerFinancialMovement,
@@ -37,7 +38,7 @@ from .models import (
     WorkLog,
 )
 from .project_costs import OPENING_PREFIX
-from .receipts import add_receipt
+from .receipts import add_receipt, quantity_warnings
 from .schemas import OrmModel
 
 router = APIRouter(prefix="/api/v1", dependencies=[Depends(require_sidecar_token)])
@@ -512,6 +513,7 @@ class PurchaseLifecycleRead(OrmModel):
     total_kurus: int
     received_kurus: int
     status: RecordStatus
+    warnings: list[dict] = Field(default_factory=list)
 
 
 @router.post("/purchases/{purchase_id}/lifecycle", response_model=PurchaseLifecycleRead)
@@ -584,7 +586,9 @@ def set_purchase_lifecycle(
     )
     session.commit()
     session.refresh(purchase)
-    return purchase
+    read = PurchaseLifecycleRead.model_validate(purchase)
+    read.warnings = quantity_warnings(session, purchase)
+    return read
 
 
 # --- Maliyet kaynakları -----------------------------------------------------------------------------
@@ -878,6 +882,11 @@ def put_cost_forecasts(
 @router.get("/projects/{project_id}/profitability")
 def project_profitability(project_id: str, session: Session = Depends(get_session)):
     project = require_active(session, Project, project_id, "Proje")
+    return compute_profitability(session, project)
+
+
+def compute_profitability(session: Session, project: Project) -> dict:
+    """Kârlılık hesabı (uç nokta, rapor, ML ve tasarruf analizi ortak kullanır)."""
     sources = collect_cost_sources(session, project)
     lines = _active_lines(session, project.id)
     approved = approved_change_total(session, project.id)
@@ -942,6 +951,7 @@ def project_profitability(project_id: str, session: Session = Depends(get_sessio
             round(profit / revised * 100, 2) if profit is not None and revised else None
         ),
         "categories": categories,
+        **project_collection_summary(session, project),
     }
 
 

@@ -220,3 +220,25 @@ kayıtlarından projeksiyonla üretilir.
 ### Alembic revizyonu
 
 12. `f4d1b8c6e2a3` calendar manual events and notifications (head)
+
+
+## P0 / WP-B4
+
+WP-B4 yeni tablo veya Alembic revizyonu eklemez; head `f4d1b8c6e2a3` olarak kalır. Raporlar, ML ve tasarruf analizi mevcut
+tablolardan salt okunur hesaplanır; sonuçlar yalnız istendiğinde `ml_runs`/`ml_predictions` içine yazılır.
+
+### Türetilmiş hesaplar
+
+- **Proje kovası (müşteri avansı):** `customer_buckets(customer_id, as_of)` müşterinin etkin hareketlerini `project_id` kovalarına
+  ayırır (`None` = bağlantısız). Tahsilatın plana dağıtılan kısmı o planın projesine, kalanı kendi `project_id` kovasına yazılır.
+  Kova `net = artış − azalış`; `net < 0` ise `advance_kurus`. `project_advance_kurus` = projeye bağlı kovaların avansları toplamı,
+  `unlinked_advance_kurus` = `None` kovasının avansı. Müşteri `credit_kurus` (B1.1) tek net bakiye olarak aynen kalır.
+- **Gerçekleşen / taahhüt:** teslim fişleri (`purchase_receipts`), işçilik tahakkuku ve giderler gerçekleşen; planlı/siparişli
+  satın almanın tamamı ve kısmi tesliminin kalanı taahhüttür. Fire malzeme hareketi (`WASTE`) satın alma maliyetinin içindedir ve
+  raporlarda yeniden işleme giderine eklenmez.
+- **13 haftalık nakit:** `calendar_api` projeksiyonunun açık `receivable_due`, `supplier_payable`, `payroll_due` olaylarından türetilir.
+- **ML kaynak olayları:** proje maliyet olayları teslim fişi tarih ve tutarlarıdır; bütçe tabanı `compute_profitability` revize bütçesidir.
+
+### Alembic revizyonları
+
+Değişmedi: head `f4d1b8c6e2a3` (B3). Yükseltme yolu testleri tüm ara revizyonlardan head'e geçişi doğrular.

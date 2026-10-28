@@ -534,3 +534,25 @@ def test_b2_schema_upgrades_to_head_with_calendar_tables(tmp_path):
         diff = compare_metadata(MigrationContext.configure(connection), Base.metadata)
     assert diff == [], diff
     engine.dispose()
+
+
+def test_every_intermediate_revision_upgrades_to_head_without_metadata_drift(tmp_path):
+    """B1, B1.1, B2, B3 ve tüm eski revizyonlardan boş şemayla head'e yükseltme."""
+    from alembic import command
+    from alembic.script import ScriptDirectory
+
+    config = migrate.alembic_config()
+    revisions = [r.revision for r in ScriptDirectory.from_config(config).walk_revisions()]
+    assert len(revisions) >= 12
+    for revision in revisions:
+        db_path = tmp_path / f"rev-{revision}.db"
+        engine = build_engine(f"sqlite:///{db_path.as_posix()}")
+        migrate._run(config, engine, lambda cfg, rev=revision: command.upgrade(cfg, rev))
+        assert migrate.current_revision(engine) == revision
+        result = migrate.upgrade_database(engine)
+        assert result["current"] == migrate.head_revision(), revision
+        with engine.connect() as connection:
+            diff = compare_metadata(MigrationContext.configure(connection), Base.metadata)
+        assert diff == [], (revision, diff)
+        assert query(db_path, "PRAGMA foreign_key_check") == []
+        engine.dispose()

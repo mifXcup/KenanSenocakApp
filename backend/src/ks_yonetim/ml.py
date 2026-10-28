@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from . import clock
 from .api import ApiError, add_audit, require_sidecar_token
 from .database import get_session
 from .finance import classify, compute_positions, load_effective
@@ -34,10 +35,12 @@ from .models import (
     Project,
     ProjectExpense,
     Purchase,
+    PurchaseReceipt,
     RecordStatus,
     Supplier,
     WorkLog,
 )
+from .project_finance import compute_profitability
 from .schemas import MLInsights, MLStatus, PriceAnomaly, ProjectRisk, ReorderForecast
 
 router = APIRouter(prefix="/api/v1/analytics/ml", dependencies=[Depends(require_sidecar_token)])
@@ -181,6 +184,13 @@ class ReorderOut(ReorderForecast):
     confidence_score: float = 0.0
     irregularity: float = 0.0
     explanation: str = ""
+    # Yalnız satın alma sıklığından türetilir; stok miktarı, tükenme veya sipariş önerisi değildir.
+    basis: str = "purchase_interval"
+    stock_claim: bool = False
+    disclaimer: str = (
+        "Bu tahmin geçmiş satın alma tarihlerine dayanır; stok miktarı veya tükenme iddiası "
+        "içermez ve otomatik sipariş oluşturmaz."
+    )
     first_date: date | None = None
     last_date: date | None = None
 
@@ -241,18 +251,27 @@ class ProjectRiskOut(ProjectRisk):
     confidence_score: float = 0.0
     explanation: str = ""
     first_date: date | None = None
+    # Risk esası: proje kârlılığındaki tahmini bitiş maliyeti (forecast_cost_at_completion_kurus).
+    forecast_cost_at_completion_kurus: int | None = None
+    forecast_overrun_kurus: int = 0
+    forecast_usage_percent: float | None = None
+    commitment_kurus: int = 0
+    forecast_source: str = "auto"
+    budget_basis: str = "project_budget"
 
 
 def project_events(session: Session, project_id: str, upto: date) -> list[tuple[date, int]]:
     events: list[tuple[date, int]] = []
     events.extend(
         session.execute(
-            select(Purchase.purchase_date, Purchase.total_kurus)
+            select(PurchaseReceipt.receipt_date, PurchaseReceipt.amount_kurus)
+            .join(Purchase, Purchase.id == PurchaseReceipt.purchase_id)
             .join(Material, Material.id == Purchase.material_id)
             .where(
                 Purchase.project_id == project_id,
                 *usable_purchases(),
-                Purchase.purchase_date <= upto,
+                PurchaseReceipt.status == RecordStatus.ACTIVE,
+                PurchaseReceipt.receipt_date <= upto,
             )
         ).all()
     )
@@ -280,19 +299,23 @@ def project_events(session: Session, project_id: str, upto: date) -> list[tuple[
 
 
 def project_insights(session: Session, as_of: date) -> tuple[list[ProjectRiskOut], int]:
+    """Bütçe riski. Esas: kârlılıktaki tahmini bitiş maliyeti; trend (30 gün) ikincil sinyaldir.
+
+    Risk `high`: tahmini bitiş maliyeti bütçeyi aşıyor (gerçekleşen + taahhüt + kalan tahmin > bütçe) veya
+    30 günlük trend bütçeyi aşıyor; `medium`: trend veya (gerçekleşen + taahhüt) bütçenin %80'inde.
+    """
     output: list[ProjectRiskOut] = []
     ready_count = 0
     projects = session.scalars(
         select(Project)
-        .where(
-            Project.status == RecordStatus.ACTIVE,
-            Project.project_state == "active",
-            Project.budget_kurus.is_not(None),
-            Project.budget_kurus > 0,
-        )
+        .where(Project.status == RecordStatus.ACTIVE, Project.project_state == "active")
         .order_by(Project.name, Project.id)
     ).all()
     for project in projects:
+        profit = compute_profitability(session, project)
+        budget = profit["revised_budget_kurus"] or 0
+        if budget <= 0:
+            continue
         events = project_events(session, project.id, as_of)
         if len(events) < MIN_PROJECT_EVENTS:
             continue
@@ -306,10 +329,19 @@ def project_insights(session: Session, as_of: date) -> tuple[list[ProjectRiskOut
         intercept, slope = linear_fit(points)
         horizon = float((as_of - first_date).days + 30)
         projected = max(cumulative, round(intercept + slope * horizon))
-        budget = project.budget_kurus or 0
         usage = cumulative / budget * 100
         projected_usage = projected / budget * 100
-        risk = "high" if projected_usage >= 100 else "medium" if projected_usage >= 80 else "low"
+        forecast = profit["forecast_cost_at_completion_kurus"]
+        overrun = max(forecast - budget, 0)
+        committed = profit["actual_cost_kurus"] + profit["commitment_kurus"]
+        committed_usage = committed / budget * 100
+        if overrun > 0 or projected_usage >= 100:
+            risk = "high"
+        elif projected_usage >= 80 or committed_usage >= 80:
+            risk = "medium"
+        else:
+            risk = "low"
+        manual = profit["manual_forecast_count"] > 0
         output.append(
             ProjectRiskOut(
                 project_id=project.id,
@@ -323,11 +355,20 @@ def project_insights(session: Session, as_of: date) -> tuple[list[ProjectRiskOut
                 risk_level=risk,
                 confidence_score=round(min(1.0, len(events) / 12), 3),
                 explanation=(
-                    f"{project.name}: {len(events)} maliyet olayına göre bugüne kadar {cumulative} "
-                    f"kuruş (bütçenin %{round(usage, 1)}'i); 30 gün sonrası için {projected} kuruş "
+                    f"{project.name}: tahmini bitiş maliyeti {forecast} kuruş "
+                    f"({'yönetici tahmini' if manual else 'otomatik artık'} dahil), bütçe {budget} kuruş"
+                    f"{f'; {overrun} kuruş aşım bekleniyor' if overrun else ''}. "
+                    f"{len(events)} maliyet olayına göre bugüne kadar {cumulative} kuruş "
+                    f"(bütçenin %{round(usage, 1)}'i); 30 gün sonrası için {projected} kuruş "
                     f"(%{round(projected_usage, 1)}) bekleniyor → {risk} risk."
                 ),
                 first_date=first_date,
+                forecast_cost_at_completion_kurus=forecast,
+                forecast_overrun_kurus=overrun,
+                forecast_usage_percent=round(forecast / budget * 100, 2),
+                commitment_kurus=profit["commitment_kurus"],
+                forecast_source="manual" if manual else "auto",
+                budget_basis=profit["budget_source"],
             )
         )
     output.sort(key=lambda row: (-row.projected_usage_percent, row.project_name))
@@ -675,16 +716,57 @@ class MLInsightsOut(MLInsights):
     supplier_comparisons: list[dict] = Field(default_factory=list)
     payroll_forecast: dict | None = None
     debt_risks: list[dict] = Field(default_factory=list)
+    # Model başına hazırlık: ready=false iken tahmin listesi boştur ve message gereksinimi açıklar.
+    models: list[dict] = Field(default_factory=list)
+    read_only: bool = True
+    automatic_actions: list[str] = Field(default_factory=list)
+
+
+def model_summaries(
+    prices, reorders, projects, suppliers, forecast, closed_periods, debts, debt_employees
+) -> list[dict]:
+    def average(values: list[float]) -> float | None:
+        return round(sum(values) / len(values), 3) if values else None
+
+    data = {
+        "price_anomaly": (len(prices), sum(r.sample_count for r in prices),
+                          average([min(1.0, r.sample_count / 12) for r in prices])),
+        "reorder": (len(reorders), sum(r.sample_count for r in reorders),
+                    average([r.confidence_score for r in reorders])),
+        "project_budget_risk": (len(projects), sum(r.sample_count for r in projects),
+                                average([r.confidence_score for r in projects])),
+        "supplier_price_comparison": (len(suppliers), sum(r["sample_count"] for r in suppliers),
+                                      average([r["confidence_score"] for r in suppliers])),
+        "payroll_load": (1 if forecast else 0, closed_periods,
+                         forecast["confidence_score"] if forecast else None),
+        "employee_debt_risk": (len(debts), debt_employees,
+                               average([r["confidence_score"] for r in debts])),
+    }
+    return [
+        {
+            "model_name": name,
+            "model_version": MODEL_VERSION,
+            "ready": predictions > 0,
+            "prediction_count": predictions,
+            "sample_count": samples,
+            "confidence": confidence,
+            "requirement": REQUIREMENTS[name],
+            "message": None
+            if predictions
+            else f"Yetersiz veri: {REQUIREMENTS[name]} gerekir; tahmin üretilmedi.",
+        }
+        for name, (predictions, samples, confidence) in data.items()
+    ]
 
 
 @router.get("/insights", response_model=MLInsightsOut)
 def ml_insights(as_of: date | None = None, session: Session = Depends(get_session)):
-    effective_date = as_of or date.today()
+    effective_date = as_of or clock.business_today()
     prices, price_ready = price_insights(session)
     reorders, reorder_ready = reorder_insights(session, effective_date)
     projects, project_ready = project_insights(session, effective_date)
     suppliers, supplier_ready = supplier_comparisons(session, effective_date)
-    forecast, _closed_periods = payroll_forecast(session, effective_date)
+    forecast, closed_periods = payroll_forecast(session, effective_date)
     debts, debt_employees = debt_risks(session, effective_date)
     purchase_count = int(
         session.scalar(
@@ -720,6 +802,9 @@ def ml_insights(as_of: date | None = None, session: Session = Depends(get_sessio
         supplier_comparisons=suppliers,
         payroll_forecast=forecast,
         debt_risks=debts,
+        models=model_summaries(
+            prices, reorders, projects, suppliers, forecast, closed_periods, debts, debt_employees
+        ),
     )
 
 
@@ -881,6 +966,8 @@ def run_model(session: Session, name: str, as_of: date) -> MlRun:
     metrics = {**metrics, "prediction_count": len(preds)}
     if not preds:
         metrics["status"] = "insufficient_data"
+        metrics["ready"] = False
+        metrics["message"] = f"Yetersiz veri: {REQUIREMENTS[name]} gerekir; tahmin üretilmedi."
     run = MlRun(
         model_name=name,
         model_version=MODEL_VERSION,
@@ -1084,7 +1171,7 @@ REQUIREMENTS = {
 
 @router.get("/status")
 def ml_status(as_of: date | None = None, session: Session = Depends(get_session)):
-    day = as_of or date.today()
+    day = as_of or clock.business_today()
     insights = ml_insights(day, session)
     ready = {
         "price_anomaly": insights.status.material_series_ready,
@@ -1102,6 +1189,13 @@ def ml_status(as_of: date | None = None, session: Session = Depends(get_session)
             .where(MlRun.model_name == name)
             .order_by(MlRun.created_at.desc(), MlRun.id.desc())
         )
+        confidence = (
+            session.scalar(
+                select(func.avg(MlPrediction.confidence)).where(MlPrediction.ml_run_id == last.id)
+            )
+            if last
+            else None
+        )
         models.append(
             {
                 "model_name": name,
@@ -1109,6 +1203,11 @@ def ml_status(as_of: date | None = None, session: Session = Depends(get_session)
                 "ready": ready[name] > 0,
                 "ready_series": ready[name],
                 "requirement": REQUIREMENTS[name],
+                "message": None
+                if ready[name] > 0
+                else f"Yetersiz veri: {REQUIREMENTS[name]} gerekir; tahmin üretilmedi.",
+                "sample_count": last.sample_count if last else 0,
+                "confidence": round(float(confidence), 3) if confidence is not None else None,
                 "last_run_id": last.id if last else None,
                 "last_run_at": last.created_at if last else None,
                 "last_run_prediction_count": (last.metrics or {}).get("prediction_count")
@@ -1120,6 +1219,8 @@ def ml_status(as_of: date | None = None, session: Session = Depends(get_session)
     return {
         "local_only": True,
         "external_services": [],
+        "read_only": True,
+        "automatic_actions": [],
         "as_of": day,
         "ready": insights.status.ready,
         "run_count": int(session.scalar(select(func.count(MlRun.id))) or 0),
@@ -1132,7 +1233,7 @@ def ml_status(as_of: date | None = None, session: Session = Depends(get_session)
 def run_models(
     payload: RunRequest = Body(default_factory=RunRequest), session: Session = Depends(get_session)
 ):
-    day = payload.as_of or date.today()
+    day = payload.as_of or clock.business_today()
     evaluated = evaluate_predictions(session, day)
     runs = [run_model(session, name, day) for name in (payload.models or MODEL_NAMES)]
     add_audit(
@@ -1162,7 +1263,7 @@ def evaluate(
     payload: EvaluateRequest = Body(default_factory=EvaluateRequest),
     session: Session = Depends(get_session),
 ):
-    evaluated = evaluate_predictions(session, payload.as_of or date.today())
+    evaluated = evaluate_predictions(session, payload.as_of or clock.business_today())
     session.commit()
     return {"evaluated_predictions": evaluated, "metrics": evaluation_metrics(session)}
 

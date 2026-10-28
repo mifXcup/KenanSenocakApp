@@ -45,6 +45,42 @@ def active_receipt_total(session: Session, purchase_id: str) -> int:
     )
 
 
+def received_quantity(session: Session, purchase_id: str) -> Decimal:
+    return Decimal(
+        session.scalar(
+            select(func.coalesce(func.sum(PurchaseReceipt.quantity), 0)).where(
+                PurchaseReceipt.purchase_id == purchase_id,
+                PurchaseReceipt.status == RecordStatus.ACTIVE,
+            )
+        )
+        or 0
+    )
+
+
+def quantity_warnings(session: Session, purchase: Purchase) -> list[dict]:
+    """Teslim miktarı satın alma miktarını aşarsa engellemez; açıklanabilir uyarı döner."""
+    if purchase.quantity is None:
+        return []
+    received = received_quantity(session, purchase.id)
+    if received <= Decimal(purchase.quantity):
+        return []
+    excess = received - Decimal(purchase.quantity)
+    return [
+        {
+            "code": "quantity_over_received",
+            "message": (
+                f"Teslim alınan toplam miktar ({received}) satın alma miktarını "
+                f"({Decimal(purchase.quantity)}) {excess} aşıyor. Kayıt engellenmedi; "
+                "fazla teslim, iade veya hatalı giriş olup olmadığını kontrol edin."
+            ),
+            "purchase_id": purchase.id,
+            "purchase_quantity": str(Decimal(purchase.quantity)),
+            "received_quantity": str(received),
+            "excess_quantity": str(excess),
+        }
+    ]
+
+
 def sync_purchase(session: Session, purchase: Purchase) -> None:
     """received_kurus ve yaşam döngüsü durumunu aktif fişlerden türetir."""
     total = active_receipt_total(session, purchase.id)
@@ -186,6 +222,7 @@ class ReceiptRead(OrmModel):
     status: RecordStatus
     cancelled_at: datetime | None
     cancel_reason: str | None
+    warnings: list[dict] = Field(default_factory=list)
 
 
 @router.post("/purchases/{purchase_id}/receipts", response_model=ReceiptRead, status_code=201)
@@ -202,7 +239,9 @@ def create_receipt(
             "idempotency_conflict", "Bu anahtar başka bir kayıtta kullanılmış.", 409
         ) from exc
     session.refresh(receipt)
-    return receipt
+    read = ReceiptRead.model_validate(receipt)
+    read.warnings = quantity_warnings(session, purchase)
+    return read
 
 
 @router.get("/purchases/{purchase_id}/receipts", response_model=list[ReceiptRead])
@@ -215,7 +254,14 @@ def list_receipts(
     query = select(PurchaseReceipt).where(PurchaseReceipt.purchase_id == purchase.id)
     if not include_cancelled:
         query = query.where(PurchaseReceipt.status == RecordStatus.ACTIVE)
-    return session.scalars(query.order_by(PurchaseReceipt.receipt_date, PurchaseReceipt.id)).all()
+    reads = [
+        ReceiptRead.model_validate(r)
+        for r in session.scalars(query.order_by(PurchaseReceipt.receipt_date, PurchaseReceipt.id))
+    ]
+    warnings = quantity_warnings(session, purchase)
+    for read in reads:
+        read.warnings = warnings
+    return reads
 
 
 @router.post("/purchase-receipts/{receipt_id}/cancel", response_model=ReceiptRead)
@@ -235,4 +281,6 @@ def cancel_receipt_endpoint(
     sync_purchase(session, purchase)
     session.commit()
     session.refresh(receipt)
-    return receipt
+    read = ReceiptRead.model_validate(receipt)
+    read.warnings = quantity_warnings(session, purchase)
+    return read

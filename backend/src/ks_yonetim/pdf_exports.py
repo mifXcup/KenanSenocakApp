@@ -18,22 +18,37 @@ from sqlalchemy.orm import Session
 
 from .api import ApiError, require_sidecar_token
 from .database import get_session
-from .models import Material, Project, ProjectExpense, Purchase, RecordStatus, Supplier, WorkLog
+from .models import Project, ProjectExpense, Purchase, RecordStatus, WorkLog
 from .schemas import SpreadsheetFileResponse
 
 router = APIRouter(prefix="/api/v1", dependencies=[Depends(require_sidecar_token)])
 
 
-def register_font() -> str:
-    candidates = [
+def _bundled_font() -> Path:
+    import reportlab
+
+    return Path(reportlab.__file__).parent / "fonts" / "Vera.ttf"
+
+
+def font_candidates() -> list[Path]:
+    """Sistem yazı tipleri; sonuncusu reportlab'in paketlediği Vera'dır (Türkçe harfleri kapsar)."""
+    return [
         Path("C:/Windows/Fonts/arial.ttf"),
         Path("C:/Windows/Fonts/segoeui.ttf"),
+        Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+        Path("/System/Library/Fonts/Supplemental/Arial.ttf"),
+        _bundled_font(),
     ]
-    for path in candidates:
+
+
+def register_font() -> str:
+    """Türkçe karakterleri (ğ, ü, ş, ı, ö, ç, İ) taşıyan ilk yazı tipini kaydeder."""
+    for path in font_candidates():
         if path.exists():
-            if "KSUnicode" not in pdfmetrics.getRegisteredFontNames():
-                pdfmetrics.registerFont(TTFont("KSUnicode", str(path)))
-            return "KSUnicode"
+            name = "KSUnicode" if path != _bundled_font() else "KSUnicodeVera"
+            if name not in pdfmetrics.getRegisteredFontNames():
+                pdfmetrics.registerFont(TTFont(name, str(path)))
+            return name
     return "Helvetica"
 
 
@@ -43,7 +58,9 @@ def money(kurus: int | None) -> str:
     return f"{kurus / 100:,.2f} TL".replace(",", "X").replace(".", ",").replace("X", ".")
 
 
-def build_pdf(title: str, headers: list[str], rows: list[list[str]]) -> bytes:
+def build_pdf(
+    title: str, headers: list[str], rows: list[list[str]], notes: list[str] | None = None
+) -> bytes:
     stream = io.BytesIO()
     font = register_font()
     document = SimpleDocTemplate(
@@ -80,34 +97,26 @@ def build_pdf(title: str, headers: list[str], rows: list[list[str]]) -> bytes:
             ]
         )
     )
-    document.build([Paragraph(title, heading), Spacer(1, 6 * mm), table])
+    story = [Paragraph(title, heading), Spacer(1, 6 * mm), table]
+    if notes:
+        story.append(Spacer(1, 4 * mm))
+        story.extend(Paragraph(f"• {line}", body) for line in notes)
+    document.build(story)
     return stream.getvalue()
 
 
 @router.get("/exports/{kind}/pdf", response_model=SpreadsheetFileResponse)
 def export_pdf(kind: str, session: Session = Depends(get_session)) -> SpreadsheetFileResponse:
     if kind == "purchases":
-        title = "Satın Alma Raporu"
-        headers = ["Tarih", "Vade", "Firma", "Malzeme", "Tutar", "Açıklama"]
-        rows = []
-        records = session.execute(
-            select(Purchase, Supplier.name, Material.name)
-            .join(Supplier, Supplier.id == Purchase.supplier_id)
-            .join(Material, Material.id == Purchase.material_id)
-            .where(Purchase.status == RecordStatus.ACTIVE)
-            .order_by(Purchase.purchase_date)
+        from .exports import table_pdf
+        from .finance_reports import purchase_lifecycle_table
+
+        raw = table_pdf(purchase_lifecycle_table(session))
+        return SpreadsheetFileResponse(
+            file_name=f"kenan-senocak-{kind}.pdf",
+            mime_type="application/pdf",
+            content_base64=base64.b64encode(raw).decode("ascii"),
         )
-        for purchase, supplier_name, material_name in records:
-            rows.append(
-                [
-                    purchase.purchase_date.isoformat(),
-                    purchase.due_date.isoformat() if purchase.due_date else "—",
-                    supplier_name,
-                    material_name,
-                    money(purchase.total_kurus),
-                    purchase.description or "",
-                ]
-            )
     elif kind == "project-costs":
         title = "Proje Maliyet Raporu"
         headers = ["Proje", "Müşteri", "Satın Alma", "İşçilik", "Diğer", "Toplam", "Bütçe"]
