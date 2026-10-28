@@ -252,6 +252,52 @@ export interface EmployeePayment {
   status: RecordStatus
 }
 
+export type PayrollState = 'draft' | 'calculated' | 'finalized' | 'closed'
+
+export interface PayrollPeriod {
+  id: string
+  period_start: string
+  period_end: string
+  title: string
+  state: PayrollState
+  overtime_multiplier_percent: number | null
+  calculated_at: string | null
+  finalized_at: string | null
+  closed_at: string | null
+  status: RecordStatus
+  created_at: string
+  updated_at: string
+}
+
+export interface PayrollPeriodDetail extends PayrollPeriod {
+  entry_count: number
+  totals: Record<string, number> & { gross_earning_kurus: number; net_due_kurus: number; remaining_kurus: number }
+}
+
+export interface PayrollEntry {
+  id: string
+  payroll_period_id: string
+  employee_id: string
+  employee_name: string | null
+  wage_type: 'monthly' | 'daily' | 'hourly'
+  base_rate_kurus: number
+  normal_hours: string
+  overtime_hours: string
+  worked_days: string
+  base_earning_kurus: number
+  overtime_earning_kurus: number
+  bonus_kurus: number
+  additional_earning_kurus: number
+  deduction_kurus: number
+  advance_deduction_kurus: number
+  gross_earning_kurus: number
+  net_due_kurus: number
+  paid_kurus: number
+  remaining_kurus: number
+  calculation_detail: Record<string, unknown> | null
+  status: RecordStatus
+}
+
 export interface MLStatus {
   ready: boolean
   purchase_count: number

@@ -7,8 +7,9 @@ import { PersonnelPage } from './operations'
 import { InsightsPage } from './insights'
 import { ProjectCenterPage } from './projectCenter'
 import { MiniProjectBar } from './projectBar'
-import { AttendanceFoundationPage, CalendarFoundationPage, CustomersFoundationPage, PayrollFoundationPage } from './foundationPages'
+import { AttendanceFoundationPage, CalendarFoundationPage, CustomersFoundationPage } from './foundationPages'
 import { ProfitabilityPage } from './profitability'
+import { PayrollPeriodsPage } from './payrollPeriods'
 
 function AppContent() {
   const [purchaseOpen, setPurchaseOpen] = useState(false)
@@ -35,7 +36,7 @@ function AppContent() {
         <Route path="/malzemeler" element={<MaterialsPage />} />
         <Route path="/personel" element={<PersonnelPage />} />
         <Route path="/puantaj-izin" element={<AttendanceFoundationPage />} />
-        <Route path="/maas-donemleri" element={<PayrollFoundationPage />} />
+        <Route path="/maas-donemleri" element={<PayrollPeriodsPage />} />
         <Route path="/raporlar" element={<ReportsPage />} />
         <Route path="/akilli-ongoruler" element={<InsightsPage />} />
         <Route path="/ayarlar" element={<SettingsPage />} />

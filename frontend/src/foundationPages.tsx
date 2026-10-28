@@ -1,5 +1,5 @@
 import type { Icon } from '@phosphor-icons/react'
-import { CalendarCheck, CalendarDots, IdentificationCard, Wallet } from '@phosphor-icons/react'
+import { CalendarCheck, CalendarDots, IdentificationCard } from '@phosphor-icons/react'
 import { PageHeader, StatusBanner } from './components/ui'
 
 interface FoundationPageProps {
@@ -38,9 +38,5 @@ export function CustomersFoundationPage() {
 
 export function AttendanceFoundationPage() {
   return <FoundationPage eyebrow="PERSONEL" title="Puantaj ve İzin" description="Günlük devamı, mesaiyi ve izin bakiyelerini aylık çizelgeden yönetin." icon={CalendarCheck} capabilities={['Aylık toplu puantaj ızgarası', 'İzin hakkı, onay ve bakiye defteri', 'Eksik veya çakışan kayıt denetimi']} />
-}
-
-export function PayrollFoundationPage() {
-  return <FoundationPage eyebrow="PERSONEL" title="Maaş Dönemleri" description="Maaş hesabını kontrol edin, kesinleştirin, ödeyin ve dönemi kapatın." icon={Wallet} capabilities={['Hesapla, kontrol et, kesinleştir ve kapat', 'Avans, borç, kesinti ve ek kazanç', 'Kısmi ödeme, kalan borç ve dışa aktarma']} />
 }
 
