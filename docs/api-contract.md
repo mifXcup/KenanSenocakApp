@@ -84,7 +84,7 @@ Yerel tahmin endpoint'i fiyat için en az 5, yeniden alım aralığı için en a
   "created_at": "2026-10-25T17:15:30.123456+00:00",
   "size_bytes": 155648,
   "sha256": "64-karakterli-sha256",
-  "app_version": "0.2.0",
+  "app_version": "0.4.0",
   "integrity": "ok"
 }
 ```

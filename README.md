@@ -23,7 +23,7 @@ Bu sürüm bilinçli olarak KDV, iskonto ve ayrıntılı fatura/muhasebe işleml
 
 ## Kurulum
 
-`dist-desktop/Kenan Şenocak Yönetim Setup 0.2.0.exe` dosyasını çalıştırın.
+`TESLIM/Kenan Şenocak Yönetim Setup 0.4.0.exe` dosyasını çalıştırın.
 
 Uygulama yerel SQLite veritabanı kullanır. Veriler ve yedekler Windows kullanıcı veri dizininde saklanır. Programı güncellemeden veya farklı bir bilgisayara taşımadan önce Ayarlar > Yedekleme bölümünden manuel yedek alın.
 
