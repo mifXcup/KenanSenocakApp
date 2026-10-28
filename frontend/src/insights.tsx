@@ -5,6 +5,7 @@ import { apiRequest, formatDate, formatMoney } from './lib/api'
 import type { MLInsights } from './lib/types'
 import { Button, EmptyState, ErrorState, LoadingRows, PageHeader, StatusBanner } from './components/ui'
 import './insights.css'
+import { InsightsExtra } from './insightsExtra'
 
 const todayIso = new Intl.DateTimeFormat('en-CA', {
   timeZone: 'Europe/Istanbul', year: 'numeric', month: '2-digit', day: '2-digit',
@@ -65,6 +66,7 @@ export function InsightsPage() {
           )}
         </>
       )}
+      <InsightsExtra />
     </div>
   )
 }

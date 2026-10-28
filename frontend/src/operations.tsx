@@ -1,4 +1,6 @@
 import { useMemo, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
+import { PersonnelExtras } from './personnelExtras'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { CalendarCheck, ClockCounterClockwise, Coins, HardHat, Plus, UserPlus, UsersThree } from '@phosphor-icons/react'
 import { apiRequest, formatDate, formatMoney, toKurus } from './lib/api'
@@ -44,9 +46,10 @@ type WageRate = {
 type SheetKind = 'employee' | 'site' | 'work' | 'payment' | 'wage' | null
 
 export function PersonnelPage() {
+  const [searchParams] = useSearchParams()
   const client = useQueryClient()
   const [sheet, setSheet] = useState<SheetKind>(null)
-  const [selectedEmployeeId, setSelectedEmployeeId] = useState('')
+  const [selectedEmployeeId, setSelectedEmployeeId] = useState(searchParams.get('employee') || '')
   const employees = useQuery({ queryKey: operationKeys.employees, queryFn: () => apiRequest<Employee[]>('/api/v1/employees') })
   const sites = useQuery({ queryKey: operationKeys.sites, queryFn: () => apiRequest<Site[]>('/api/v1/sites') })
   const workLogs = useQuery({ queryKey: operationKeys.workLogs, queryFn: () => apiRequest<DetailedWorkLog[]>('/api/v1/work-logs') })
@@ -149,6 +152,7 @@ function EmployeeDetail({ employee, rates, ratesLoading, labor, paid, onClose, o
       <div><span>Yapılan ödeme</span><strong>{formatMoney(paid)}</strong><small>Maaş ve avans toplamı</small></div>
       <div><span>Kayıt farkı</span><strong>{formatMoney(labor - paid)}</strong><small>Kesinleşmiş maaş borcu değildir</small></div>
     </div>
+    <PersonnelExtras key={employee.id} employee={employee} />
     <div className="employee-detail__lower"><div><h3>Ödeme bilgisi</h3><dl><div><dt>Telefon</dt><dd>{employee.phone || 'Girilmedi'}</dd></div><div><dt>IBAN</dt><dd className="mono-value">{employee.iban || 'Girilmedi'}</dd></div></dl></div><div><h3>Ücret geçmişi</h3>{ratesLoading ? <LoadingRows count={2} /> : !rates.length ? <p className="muted">Henüz ücret geçmişi yok.</p> : <div className="wage-history">{rates.slice(0, 4).map((rate) => <div key={rate.id}><span><strong>{wageTypeLabel[rate.wage_type]} · {formatMoney(rate.rate_kurus)}</strong><small>{formatDate(rate.effective_from)}{rate.effective_to ? ` - ${formatDate(rate.effective_to)}` : ' tarihinden itibaren'}</small></span>{rate.reason && <em>{rate.reason}</em>}</div>)}</div>}</div></div>
   </section>
 }
