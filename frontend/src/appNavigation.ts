@@ -20,7 +20,6 @@ export interface NavigationItem {
   to: string
   label: string
   icon: Icon
-  contractPending?: boolean
 }
 
 export interface NavigationGroup {
@@ -33,15 +32,15 @@ export const navigationGroups: NavigationGroup[] = [
     label: 'Operasyon',
     items: [
       { to: '/', label: 'Bugün', icon: House },
-      { to: '/takvim', label: 'Takvim', icon: CalendarDots, contractPending: true },
+      { to: '/takvim', label: 'Takvim', icon: CalendarDots },
       { to: '/projeler', label: 'Projeler', icon: Buildings },
     ],
   },
   {
     label: 'Finans',
     items: [
-      { to: '/proje-karliligi', label: 'Proje Kârlılığı', icon: ChartLineUp, contractPending: true },
-      { to: '/musteriler', label: 'Müşteri Cari', icon: AddressBook, contractPending: true },
+      { to: '/proje-karliligi', label: 'Proje Kârlılığı', icon: ChartLineUp },
+      { to: '/musteriler', label: 'Müşteri Cari', icon: AddressBook },
       { to: '/firmalar', label: 'Tedarikçi Cari', icon: Storefront },
       { to: '/satin-almalar', label: 'Satın Almalar', icon: Receipt },
       { to: '/malzemeler', label: 'Malzemeler', icon: Package },
@@ -51,8 +50,8 @@ export const navigationGroups: NavigationGroup[] = [
     label: 'Personel',
     items: [
       { to: '/personel', label: 'Personel', icon: IdentificationCard },
-      { to: '/puantaj-izin', label: 'Puantaj ve İzin', icon: CalendarCheck, contractPending: true },
-      { to: '/maas-donemleri', label: 'Maaş Dönemleri', icon: Wallet, contractPending: true },
+      { to: '/puantaj-izin', label: 'Puantaj ve İzin', icon: CalendarCheck },
+      { to: '/maas-donemleri', label: 'Maaş Dönemleri', icon: Wallet },
     ],
   },
   {

@@ -130,15 +130,6 @@ h1, h2, h3, p { margin: 0; }
 .movement-mark--payment { border-color: var(--blue); }
 .timeline-row > .money { font-size: 12px; }
 
-.foundation-page { max-width: 1120px; }
-.foundation-card { min-height: 300px; display: grid; grid-template-columns: 48px minmax(0, 1fr); align-content: center; gap: 16px 18px; padding: 32px; background: white; border: 1px solid var(--border-subtle); border-radius: var(--radius-xl); box-shadow: var(--shadow-1); }
-.foundation-card__icon { width: 48px; height: 48px; display: grid; place-items: center; color: var(--wood-600); background: var(--wood-50); border-radius: var(--radius-lg); }
-.foundation-card__eyebrow { display: block; margin-bottom: 5px; color: var(--wood-600); font-size: 9px; font-weight: 750; letter-spacing: .12em; }
-.foundation-card h2 { font-size: 20px; letter-spacing: -.025em; }
-.foundation-card p { max-width: 650px; margin-top: 6px; color: var(--text-secondary); font-size: 12px; line-height: 18px; }
-.foundation-card ul { grid-column: 2; display: grid; gap: 0; margin: 10px 0 0; padding: 0; list-style: none; border-top: 1px solid var(--border-subtle); }
-.foundation-card li { min-height: 46px; display: flex; align-items: center; gap: 10px; color: var(--text-primary); border-bottom: 1px solid var(--border-subtle); font-size: 12px; }
-.foundation-card li::before { content: ''; width: 7px; height: 7px; flex: none; border: 2px solid var(--wood-500); border-radius: 50%; }
 
 .profit-layout { min-height: 680px; display: grid; grid-template-columns: 244px minmax(0, 1fr); overflow: hidden; background: white; border: 1px solid var(--border-subtle); border-radius: var(--radius-xl); }
 .profit-projects { padding: 17px 11px; background: oklch(0.975 0.008 74); border-right: 1px solid var(--border-subtle); }
@@ -274,3 +265,31 @@ html:has(.project-bar), body:has(.project-bar), body:has(.project-bar) #root { m
   .project-pulse > div:nth-child(3) { border-left: 0; border-top: 1px solid var(--border-subtle); }
   .project-pulse > div:nth-child(4) { border-top: 1px solid var(--border-subtle); }
 }
+.p0-section { padding: 20px; margin: 14px 0; min-width: 0; }
+.p0-section h2 { margin: 0 0 14px; font-size: 18px; }
+.p0-section h3 { margin: 16px 0 10px; }
+.p0-controls { display: flex; align-items: end; flex-wrap: wrap; gap: 10px; margin: 12px 0; }
+.p0-controls label { display: grid; gap: 5px; font-size: 12px; }
+.p0-controls input, .p0-controls select, .p0-section input, .p0-section select { min-height: 36px; border: 1px solid #d9d6cf; border-radius: 7px; padding: 5px 9px; background: white; color: #222; }
+.p0-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 14px 0; }
+.p0-metrics > div { display: grid; gap: 8px; background: #fff; border: 1px solid #e5e1da; border-radius: 10px; padding: 16px; }
+.p0-metrics span, .p0-row small { color: #777; font-size: 12px; }
+.p0-metrics strong { font-size: 19px; }
+.p0-list { display: grid; gap: 8px; }
+.p0-row { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; padding: 9px 0; border-bottom: 1px solid #eeeae4; }
+.p0-row > div { display: grid; gap: 4px; flex: 1; min-width: 160px; }
+.p0-row a { color: #4d6557; }
+.p0-calendar-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); gap: 12px; }
+.p0-two-col { display: grid; grid-template-columns: minmax(200px, 260px) minmax(0, 1fr); gap: 18px; }
+.p0-select-row { display: block; width: 100%; text-align: left; padding: 10px; border: 0; border-bottom: 1px solid #ece8e1; background: transparent; cursor: pointer; }
+.p0-json { overflow: auto; max-height: 240px; font-size: 12px; }
+@media (max-width: 1080px) { .p0-two-col { grid-template-columns: 1fr; } }
+@media (max-width: 1080px) {
+  .profit-layout, .payroll-layout, .settings-grid, .insights-grid { grid-template-columns: minmax(0, 1fr); }
+  .profit-projects, .payroll-periods { max-height: 220px; overflow: auto; }
+  .toolbar { gap: 12px; }
+  .toolbar__actions { min-width: 0; }
+  .main-content { min-width: 0; }
+}
+.p0-report-table { max-height: 60vh; overflow: auto; }
+.p0-report-table thead th { position: sticky; top: 0; background: #fff; z-index: 1; }
