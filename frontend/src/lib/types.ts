@@ -49,6 +49,90 @@ export interface ProjectMeasurement { id: string; project_id: string; space_name
 export interface ProjectVisit { id: string; project_id: string; visit_date: string; purpose: string; visit_state: 'planned' | 'completed' | 'cancelled'; note: string | null; created_at: string }
 export interface ProjectHub { project: Project; notes: ProjectNote[]; tasks: ProjectTask[]; colors: ProjectColor[]; measurements: ProjectMeasurement[]; visits: ProjectVisit[] }
 
+export interface ProductCostFactor {
+  id: string
+  factor_key: string
+  label: string
+  material_id: string | null
+  share_percent: number
+  reference_unit_price_kurus: number
+  reference_date: string
+  source: 'manual' | 'purchase'
+}
+
+export interface PricingComparableFactor {
+  factor_key: string
+  label: string
+  share_percent: number
+  reference_unit_price_kurus: number
+  current_unit_price_kurus: number
+  change_percent: number
+  current_source: string
+  current_date: string
+}
+
+export interface PricingSuggestion {
+  id: string
+  suggested_low_kurus: number
+  suggested_mid_kurus: number
+  suggested_high_kurus: number
+  confidence: 'low' | 'medium' | 'high'
+  comparable_count: number
+  model_version: string
+  created_at: string
+  explanation: {
+    as_of: string
+    method: string
+    spread_percent: number
+    warnings: string[]
+    comparables: Array<{
+      product_id: string
+      project_id: string
+      quote_date: string
+      base_price_kurus: number
+      normalized_price_kurus: number
+      used_actual_cost: boolean
+      factors: PricingComparableFactor[]
+    }>
+  }
+}
+
+export interface ProjectProduct {
+  id: string
+  project_id: string
+  product_type: string
+  description: string | null
+  quantity: number
+  unit: string
+  finish: string | null
+  hardware_level: string | null
+  complexity_percent: number
+  quote_date: string
+  quoted_total_kurus: number | null
+  accepted_total_kurus: number | null
+  actual_cost_kurus: number | null
+  target_margin_percent: number
+  pricing_state: 'draft' | 'offered' | 'accepted' | 'rejected' | 'completed'
+  note: string | null
+  factors: ProductCostFactor[]
+  latest_suggestion: PricingSuggestion | null
+  created_at: string
+  updated_at: string
+}
+
+export interface PricingLearningStatus {
+  model_name: 'product_pricing'
+  model_version: string
+  product_count: number
+  priced_product_count: number
+  actual_cost_count: number
+  factor_coverage_count: number
+  ready: boolean
+  message: string
+  product_types: Array<{ product_type: string; priced_count: number }>
+  latest_manual_indices: Array<{ id: string; factor_key: string; label: string; material_id: string | null; recorded_on: string; unit_price_kurus: number; source: string }>
+}
+
 export interface ProjectCostSummary {
   project_id: string
   purchase_kurus: number

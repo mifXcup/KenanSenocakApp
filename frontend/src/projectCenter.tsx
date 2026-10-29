@@ -8,6 +8,7 @@ import {
 import { apiRequest, formatDate, toKurus } from './lib/api'
 import type { Project, ProjectHub, ProjectTask } from './lib/types'
 import { Button, EmptyState, ErrorState, Field, LoadingRows, PageHeader, SelectInput, SideSheet, TextInput } from './components/ui'
+import { ProductPricingPanel } from './productPricing'
 
 const stages: Array<[Project['stage'], string]> = [
   ['planning', 'Planlama'], ['design', 'Tasarım'], ['approval', 'Onay'], ['production', 'Üretim'],
@@ -94,6 +95,7 @@ export function ProjectCenterPage() {
                 {data.visits.length ? <div className="visit-list">{data.visits.slice(0, 5).map((visit) => <div key={visit.id}><span className={`visit-date ${visit.visit_state === 'completed' ? 'visit-date--done' : ''}`}><b>{new Date(`${visit.visit_date}T12:00:00`).toLocaleDateString('tr-TR', { day: '2-digit' })}</b><small>{new Date(`${visit.visit_date}T12:00:00`).toLocaleDateString('tr-TR', { month: 'short' })}</small></span><span><strong>{visit.purpose}</strong><small>{visit.note || (visit.visit_state === 'planned' ? 'Planlandı' : 'Tamamlandı')}</small></span></div>)}</div> : <MiniEmpty text="Planlanmış ziyaret bulunmuyor." />}
               </HubSection>
             </div>
+            <ProductPricingPanel projectId={activeSelectedId} />
           </>}
         </section>
       </div>

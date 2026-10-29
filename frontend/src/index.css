@@ -279,6 +279,43 @@ html:has(.project-bar), body:has(.project-bar), body:has(.project-bar) #root { m
 .p0-row { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; padding: 9px 0; border-bottom: 1px solid #eeeae4; }
 .p0-row > div { display: grid; gap: 4px; flex: 1; min-width: 160px; }
 .p0-row a { color: #4d6557; }
+
+.pricing-panel { margin: 18px 20px 20px; }
+.pricing-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
+.pricing-heading h2 { margin-bottom: 5px; }
+.pricing-heading p { margin: 0; color: var(--text-secondary); font-size: 13px; }
+.pricing-list { display: grid; gap: 12px; margin-top: 18px; }
+.pricing-product { padding: 16px; border: 1px solid var(--border-subtle); border-radius: var(--radius-md); background: var(--surface-secondary); }
+.pricing-product > header { display: flex; justify-content: space-between; gap: 18px; }
+.pricing-product h3 { margin: 7px 0 3px; font-size: 16px; }
+.pricing-product p { margin: 0; color: var(--text-secondary); font-size: 12px; }
+.pricing-product__price { text-align: right; display: grid; gap: 3px; }
+.pricing-product__price small, .pricing-suggestion small { color: var(--text-secondary); font: 650 10px "Geist Mono Variable", monospace; letter-spacing: .04em; }
+.pricing-product__price strong { font-size: 17px; }
+.pricing-factors { display: flex; flex-wrap: wrap; gap: 7px; margin: 12px 0; }
+.pricing-factors span { display: inline-flex; align-items: center; gap: 5px; padding: 6px 8px; border-radius: 7px; background: white; color: var(--text-secondary); font-size: 11px; }
+.pricing-suggestion { display: grid; grid-template-columns: minmax(240px, .8fr) minmax(280px, 1.2fr); gap: 16px; margin-top: 13px; padding: 14px; border-left: 3px solid var(--wood-500); background: white; }
+.pricing-suggestion > div:first-child { display: grid; gap: 5px; }
+.pricing-suggestion > div:first-child strong { font-size: 17px; }
+.pricing-suggestion > div:first-child span { font-size: 12px; color: var(--text-secondary); }
+.pricing-comparables { display: grid; gap: 5px; font-size: 11px; color: var(--text-secondary); }
+.pricing-comparables em { color: #8b5b1c; font-style: normal; }
+.pricing-message { color: var(--wood-700) !important; }
+.factor-editor { margin-top: 8px; padding-top: 14px; border-top: 1px solid var(--border-subtle); }
+.factor-editor__heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.factor-editor__heading h3 { margin: 0 0 4px; }
+.factor-editor__heading p { margin: 0; color: var(--text-secondary); font-size: 12px; }
+.factor-card { position: relative; display: grid; gap: 12px; margin-top: 12px; padding: 14px; border: 1px solid var(--border-subtle); border-radius: var(--radius-md); background: var(--surface-secondary); }
+.factor-card > button { position: absolute; top: 8px; right: 8px; width: 28px; height: 28px; display: grid; place-items: center; border: 0; background: transparent; color: var(--text-secondary); cursor: pointer; }
+.learning-ready { display: inline-flex; align-items: center; gap: 6px; padding: 7px 10px; border-radius: 999px; color: #8b5b1c; background: #fff4dc; font-size: 12px; font-weight: 650; }
+.learning-ready--ok { color: #356346; background: #e9f5ec; }
+.learning-message { display: flex; align-items: center; gap: 7px; color: var(--text-secondary); }
+
+@media (max-width: 1100px) {
+  .pricing-suggestion { grid-template-columns: 1fr; }
+  .pricing-product > header, .pricing-heading { align-items: stretch; flex-direction: column; }
+  .pricing-product__price { text-align: left; }
+}
 .p0-calendar-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); gap: 12px; }
 .p0-two-col { display: grid; grid-template-columns: minmax(200px, 260px) minmax(0, 1fr); gap: 18px; }
 .p0-select-row { display: block; width: 100%; text-align: left; padding: 10px; border: 0; border-bottom: 1px solid #ece8e1; background: transparent; cursor: pointer; }
