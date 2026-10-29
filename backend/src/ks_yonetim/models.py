@@ -186,6 +186,99 @@ class ProjectVisit(TimestampMixin, Base):
     status: Mapped[RecordStatus] = mapped_column(Enum(RecordStatus), default=RecordStatus.ACTIVE)
 
 
+class ProjectProduct(TimestampMixin, Base):
+    """A priced product/line item that can become a comparable for future quotations."""
+
+    __tablename__ = "project_products"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    project_id: Mapped[str] = mapped_column(
+        ForeignKey("projects.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    product_type: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    description: Mapped[str | None] = mapped_column(String(280))
+    quantity: Mapped[Decimal] = mapped_column(Numeric(18, 3), nullable=False)
+    unit: Mapped[str] = mapped_column(String(24), nullable=False)
+    finish: Mapped[str | None] = mapped_column(String(120))
+    hardware_level: Mapped[str | None] = mapped_column(String(80))
+    # 100 standart iş; kullanıcı tarafından işin göreli zorluğu olarak girilir.
+    complexity_percent: Mapped[int] = mapped_column(Integer, default=100, server_default="100")
+    quote_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    quoted_total_kurus: Mapped[int | None] = mapped_column(Integer)
+    accepted_total_kurus: Mapped[int | None] = mapped_column(Integer)
+    actual_cost_kurus: Mapped[int | None] = mapped_column(Integer)
+    target_margin_percent: Mapped[Decimal] = mapped_column(
+        Numeric(6, 2), default=Decimal(25), server_default="25"
+    )
+    pricing_state: Mapped[str] = mapped_column(
+        String(16), default="draft", server_default="draft", index=True
+    )
+    note: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[RecordStatus] = mapped_column(
+        Enum(RecordStatus), default=RecordStatus.ACTIVE, index=True
+    )
+
+
+class ProductCostFactor(TimestampMixin, Base):
+    """Cost share and its price at quote time; used to normalize old prices to today."""
+
+    __tablename__ = "product_cost_factors"
+    __table_args__ = (
+        UniqueConstraint("project_product_id", "factor_key", name="uq_product_cost_factor_key"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    project_product_id: Mapped[str] = mapped_column(
+        ForeignKey("project_products.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    factor_key: Mapped[str] = mapped_column(String(80), nullable=False)
+    label: Mapped[str] = mapped_column(String(120), nullable=False)
+    material_id: Mapped[str | None] = mapped_column(
+        ForeignKey("materials.id", ondelete="RESTRICT"), index=True
+    )
+    share_percent: Mapped[Decimal] = mapped_column(Numeric(6, 2), nullable=False)
+    reference_unit_price_kurus: Mapped[int] = mapped_column(Integer, nullable=False)
+    reference_date: Mapped[date] = mapped_column(Date, nullable=False)
+    source: Mapped[str] = mapped_column(String(16), default="manual", server_default="manual")
+
+
+class PricingIndexEntry(TimestampMixin, Base):
+    """Dated manual benchmark for costs that are not represented by a purchase."""
+
+    __tablename__ = "pricing_index_entries"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    factor_key: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    label: Mapped[str] = mapped_column(String(120), nullable=False)
+    material_id: Mapped[str | None] = mapped_column(
+        ForeignKey("materials.id", ondelete="RESTRICT"), index=True
+    )
+    recorded_on: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    unit_price_kurus: Mapped[int] = mapped_column(Integer, nullable=False)
+    note: Mapped[str | None] = mapped_column(String(280))
+    source: Mapped[str] = mapped_column(String(16), default="manual", server_default="manual")
+    status: Mapped[RecordStatus] = mapped_column(
+        Enum(RecordStatus), default=RecordStatus.ACTIVE, index=True
+    )
+
+
+class PricingSuggestion(Base):
+    __tablename__ = "pricing_suggestions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    project_product_id: Mapped[str] = mapped_column(
+        ForeignKey("project_products.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    suggested_low_kurus: Mapped[int] = mapped_column(Integer, nullable=False)
+    suggested_mid_kurus: Mapped[int] = mapped_column(Integer, nullable=False)
+    suggested_high_kurus: Mapped[int] = mapped_column(Integer, nullable=False)
+    confidence: Mapped[str] = mapped_column(String(12), nullable=False)
+    comparable_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    explanation: Mapped[dict] = mapped_column(JSON, nullable=False)
+    model_version: Mapped[str] = mapped_column(String(16), nullable=False, default="1.0")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
 class Purchase(TimestampMixin, Base):
     __tablename__ = "purchases"
     __table_args__ = (

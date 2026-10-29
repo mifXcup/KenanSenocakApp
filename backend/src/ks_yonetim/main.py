@@ -20,6 +20,7 @@ from .ml import router as ml_router
 from .operations import router as operations_router
 from .payroll import router as payroll_router
 from .pdf_exports import router as pdf_router
+from .pricing import router as pricing_router
 from .project_costs import router as project_costs_router
 from .project_finance import router as project_finance_router
 from .receipts import router as receipts_router
@@ -63,6 +64,7 @@ app.include_router(leave_router)
 app.include_router(calendar_router)
 app.include_router(project_costs_router)
 app.include_router(project_finance_router)
+app.include_router(pricing_router)
 app.include_router(receipts_router)
 app.include_router(supplier_ledger_router)
 app.include_router(staff_reports_router)
