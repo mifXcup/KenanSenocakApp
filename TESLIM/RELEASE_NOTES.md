@@ -1,13 +1,17 @@
-# Kenan Şenocak Yönetim 0.4.0
+# Kenan Şenocak Yönetim 0.5.0
 
-## Yenilikler
+## Yeni: Ürün Fiyat Öneri Motoru
 
-- Müşteri cari: tahsilat planı, avans, tahsilat dağıtımı, ekstre ve yaşlandırma.
-- Proje: sözleşme, bütçe revizyonu, ek iş, gerçekleşen ve taahhüt maliyet, manuel kalan tahmin, bitirme maliyeti ve kârlılık.
-- Tedarikçi: satın alma yaşam döngüsü, kısmi teslim, ödeme, borç ekstresi ve fiyat geçmişi.
-- Personel: profil, puantaj, izin, ücret, maaş dönemi, ödeme ve finans hareketleri.
-- Bugün ve takvim: kaynak bağlantılı olaylar, filtreler, tekrar eden manuel olaylar ve Windows bildirimleri.
-- Finans ve personel raporları: JSON görünüm, Excel ve PDF indirme; yerel ML modelleri ve tasarruf fırsatları.
-- 0.3.0 veritabanından otomatik, ön yedekli şema yükseltmesi.
+- Proje Takip ekranına ürün, miktar/birim, yüzey, aksesuar seviyesi, zorluk, teklif ve gerçekleşen maliyet kaydı eklendi.
+- Geçmiş ürün teklifleri güncel malzeme ve manuel maliyet referanslarına taşınarak düşük/merkez/yüksek fiyat aralığı üretiliyor.
+- Fiyat artışı bütün teklife uygulanmıyor; yalnız kullanıcı tarafından tanımlanan MDF, işçilik, boya ve benzeri maliyet payları güncelleniyor.
+- Her öneri kullanılan benzer teklifleri, eski/güncel birim fiyatı, değişim yüzdesini, güven seviyesini ve eksik veri uyarılarını gösteriyor.
+- Akıllı Öngörüler ekranına fiyatlı geçmiş, gerçekleşen maliyet ve maliyet payı kapsamını gösteren Fiyat Öğrenimi paneli eklendi.
+- Satın alma geçmişinde bulunmayan işçilik veya piyasa değerleri tarihli manuel maliyet referansı olarak girilebiliyor.
+- Kabul edilen fiyat ve proje sonunda gerçekleşen maliyet daha sonraki öneriler için öğrenme verisi oluyor.
 
-Veriler yerel kullanıcı dizininde tutulur. Kurulum paketi kaynak kod, Python veya Node kurulumu gerektirmez.
+## Düzeltme
+
+- Personel finans ekstresi backend sözleşmesindeki `lines` alanından doğru görüntüleniyor.
+
+0.4.0 kapsamındaki müşteri, proje finansı, tedarikçi, personel, takvim, bildirim, rapor, yedekleme ve diğer yerel ML özellikleri korunmuştur. Veriler yerel kullanıcı dizininde tutulur; kurulum paketi kaynak kod, Python veya Node kurulumu gerektirmez.

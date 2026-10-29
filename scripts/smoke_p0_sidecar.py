@@ -64,6 +64,12 @@ def main() -> None:
                 call("POST", f"/purchases/{purchase['id']}/lifecycle", {"state": "ordered"})
                 call("POST", f"/purchases/{purchase['id']}/receipts", {"receipt_date": "2026-10-28", "amount_kurus": 200_000, "quantity": "2.000", "idempotency_key": "smoke-receipt-0001"}, 201)
                 call("POST", f"/purchases/{purchase['id']}/receipts", {"receipt_date": "2026-10-28", "amount_kurus": 200_000, "quantity": "2.000", "idempotency_key": "smoke-receipt-0002"}, 201)
+                historical_product = call("POST", f"/projects/{pid}/products", {"product_type": "Lake dolap", "quantity": 10, "unit": "m²", "quote_date": "2026-01-10", "quoted_total_kurus": 15_000_000, "pricing_state": "offered", "factors": [{"factor_key": f"material-{material['id']}", "label": "Smoke MDF", "material_id": material["id"], "share_percent": 30, "reference_unit_price_kurus": 80_000, "reference_date": "2026-01-10"}]}, 201)
+                target_product = call("POST", f"/projects/{pid}/products", {"product_type": "Lake dolap", "quantity": 10, "unit": "m²", "quote_date": "2026-10-28", "target_margin_percent": 25}, 201)
+                suggestion = call("POST", f"/project-products/{target_product['id']}/suggestions", {}, 201)
+                assert suggestion["suggested_mid_kurus"] == 16_125_000
+                assert suggestion["explanation"]["comparables"][0]["product_id"] == historical_product["id"]
+                assert call("GET", "/pricing/status")["priced_product_count"] == 1
                 call("POST", "/payments", {"supplier_id": supplier["id"], "purchase_id": purchase["id"], "payment_date": "2026-10-28", "amount_kurus": 100_000, "idempotency_key": "smoke-payment-0001"}, 201)
                 employee = call("POST", "/employees", {"name": "Smoke Usta", "wage_type": "daily", "current_rate_kurus": 80_000, "rate_effective_from": "2026-10-01", "employment_start_date": "2026-10-01"}, 201)
                 call("POST", "/work-logs", {"employee_id": employee["id"], "project_id": pid, "work_date": "2026-10-27", "work_status": "worked", "normal_hours": 8}, 201)
