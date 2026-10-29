@@ -241,4 +241,20 @@ tablolardan salt okunur hesaplanır; sonuçlar yalnız istendiğinde `ml_runs`/`
 
 ### Alembic revizyonları
 
-Değişmedi: head `f4d1b8c6e2a3` (B3). Yükseltme yolu testleri tüm ara revizyonlardan head'e geçişi doğrular.
+## 0.5 / Ürün fiyat öneri motoru
+
+- `project_products`: proje içindeki fiyatlandırılabilir ürün satırı; ürün türü, miktar/birim, yüzey, aksesuar seviyesi,
+  göreli zorluk, teklif tarihi, verilen/kabul edilen fiyat, gerçekleşen maliyet, hedef marj ve teklif durumu.
+- `product_cost_factors`: ürünün teklif tarihindeki maliyet etkileri. `share_percent` toplamı API'de %100 ile sınırlıdır;
+  `reference_unit_price_kurus` ve `reference_date` geçmiş fiyatı sabitler. Malzemeye bağlanan etki güncel fiyatı son aktif
+  satın almadan, malzemesiz etki `pricing_index_entries` kaydından alır.
+- `pricing_index_entries`: satın alma dışında kalan işçilik/boya/piyasa referanslarının tarihli, denetlenebilir manuel serisi.
+- `pricing_suggestions`: düşük/merkez/yüksek öneri, güven, karşılaştırılabilir kayıt sayısı, model sürümü ve bütün
+  normalizasyon adımlarını içeren açıklama anlık görüntüsü. Öneri finansal hareket veya teklif onayı oluşturmaz.
+
+Fiyat normalizasyonunda yalnız tanımlı maliyet payları güncellenir; kalan pay 1,0 katsayısında tutulur. Gerçekleşen maliyet
+varsa hedef marj maliyet üzerine uygulanır, yoksa geçmiş satış fiyatı düşük güvenli karşılaştırma tabanı olur.
+
+### Alembic revizyonu
+
+13. `a5e2c7d9f1b3` product pricing engine (head). Yükseltme yolu testleri tüm ara revizyonlardan yeni head'e geçişi doğrular.

@@ -84,7 +84,7 @@ Yerel tahmin endpoint'i fiyat için en az 5, yeniden alım aralığı için en a
   "created_at": "2026-10-25T17:15:30.123456+00:00",
   "size_bytes": 155648,
   "sha256": "64-karakterli-sha256",
-  "app_version": "0.4.0",
+  "app_version": "0.5.0",
   "integrity": "ok"
 }
 ```
@@ -894,3 +894,18 @@ yüksek, ≥ %10 orta; ek iş yaşı > 30 gün yüksek, > 14 gün orta; avans pa
 2. `ProjectRisk` risk seviyesi artık tahmini bitiş maliyetinden etkilenir; aynı veriyle seviye daha yüksek çıkabilir. Bütçesi yalnız
    bütçe satırlarıyla tanımlı projeler de riske dahil edilir.
 3. Teslim fişi/lifecycle yanıtlarında `warnings` alanı eklendi (boş liste olabilir); `ReportTable` JSON'una `notes`/`warnings` eklendi.
+
+## 0.5 ürün fiyatlandırma API'si
+
+- `GET /projects/{project_id}/products`: aktif ürün/teklif satırlarını maliyet etkileri ve son öneriyle listeler.
+- `POST /projects/{project_id}/products`: ürün satırı oluşturur. `factors[]` için `factor_key`, `label`, isteğe bağlı
+  `material_id`, `share_percent`, `reference_unit_price_kurus`, `reference_date` gerekir; toplam pay %100'ü aşamaz.
+- `PATCH /project-products/{product_id}`: kabul edilen fiyat, gerçekleşen maliyet, durum, marj ve maliyet etkilerini günceller.
+- `POST /project-products/{product_id}/suggestions?as_of=YYYY-MM-DD`: aynı ürün türü ve birimindeki geçmiş kayıtları miktar,
+  zorluk ve güncel maliyet etkileriyle normalize eder. Geçmiş yoksa `pricing_history_insufficient` (409) döner.
+- `POST /pricing/indices`: satın alma dışındaki tarihli maliyet referansını ekler. Finansal hareket oluşturmaz.
+- `GET /pricing/status`: ürün, fiyatlı geçmiş, gerçekleşen maliyet, maliyet payı kapsamı ve son manuel referansları döner.
+
+Öneri yanıtı `suggested_low_kurus`, `suggested_mid_kurus`, `suggested_high_kurus`, `confidence`, `comparable_count`,
+`model_version` ve `explanation` içerir. `explanation.comparables[].factors[]` eski/güncel birim fiyatı, değişim yüzdesini ve
+güncel değerin satın alma mı manuel referans mı olduğunu açıklar. Hiçbir endpoint otomatik teklif göndermez veya onaylamaz.

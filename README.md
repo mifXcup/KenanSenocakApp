@@ -18,12 +18,13 @@ Mobilya atölyesi için çevrimdışı çalışan Windows masaüstü yönetim uy
 - Kontrollü Excel şablonları, ön izleme ve toplu içe aktarma
 - Excel ve PDF rapor dışa aktarma
 - Yerel fiyat anomalisi, yeniden alım ve bütçe riski tahminleri
+- Geçmiş ürün tekliflerini güncel malzeme/işçilik maliyetlerine taşıyan açıklanabilir fiyat önerileri
 
 Bu sürüm bilinçli olarak KDV, iskonto ve ayrıntılı fatura/muhasebe işlemleri içermez.
 
 ## Kurulum
 
-`TESLIM/Kenan Şenocak Yönetim Setup 0.4.0.exe` dosyasını çalıştırın.
+`TESLIM/Kenan Şenocak Yönetim Setup 0.5.0.exe` dosyasını çalıştırın.
 
 Uygulama yerel SQLite veritabanı kullanır. Veriler ve yedekler Windows kullanıcı veri dizininde saklanır. Programı güncellemeden veya farklı bir bilgisayara taşımadan önce Ayarlar > Yedekleme bölümünden manuel yedek alın.
 
@@ -58,6 +59,8 @@ npm run dist
 ## Yerel tahmin modelleri
 
 Tahminler hiçbir veriyi dışarı göndermez. Fiyat modeli en az 5, yeniden alım modeli en az 4 kayıt ister. Proje bütçe modeli en az 4 maliyet hareketi olmadan sonuç üretmez. Yetersiz veri, tahmin yerine açıkça bildirilir.
+
+Ürün fiyat öneri motoru Proje Takip > Ürünler ve fiyat önerisi alanındadır. İlk öneri için aynı ürün türü ve biriminde fiyatı bulunan en az bir geçmiş kayıt gerekir; az kayıtta sonuç düşük güvenli aralık olarak gösterilir. Akıllı Öngörüler > Fiyat Öğrenimi ekranı fiyatlı geçmiş, gerçekleşen maliyet ve maliyet payı kapsamını gösterir.
 
 ## Dağıtım notu
 
