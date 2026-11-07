@@ -33,8 +33,14 @@ jobs:
       - name: Configure the update source
         shell: pwsh
         run: npm run configure:update -- $env:GITHUB_REPOSITORY
-      - name: Build, sign if configured, and publish release assets
+      - name: Build Windows release assets
         shell: pwsh
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npm run dist:publish
+        run: npm run dist
+      - name: Publish installer and update manifest
+        uses: softprops/action-gh-release@v2
+        with:
+          fail_on_unmatched_files: true
+          files: |
+            dist-desktop/*.exe
+            dist-desktop/*.exe.blockmap
+            dist-desktop/latest.yml

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ks-yonetim-core"
-version = "0.5.8"
+version = "0.5.9"
 description = "Kenan Şenocak Yönetim yerel masaüstü veri çekirdeği"
 requires-python = ">=3.14"
 dependencies = [

@@ -24,7 +24,7 @@ Bu sürüm bilinçli olarak KDV, iskonto ve ayrıntılı fatura/muhasebe işleml
 
 ## Kurulum
 
-`Kenan Şenocak Yönetim Setup 0.5.8.exe` dosyasını GitHub Releases sayfasından indirin. Önceki sürüm kuruluysa uygulamayı kapatıp aynı kurulum konumunu seçerek mevcut kurulumun üzerine güncelleyin; kaldırma işlemi gerekmez.
+`Kenan Şenocak Yönetim Setup 0.5.9.exe` dosyasını GitHub Releases sayfasından indirin. Önceki sürüm kuruluysa uygulamayı kapatıp aynı kurulum konumunu seçerek mevcut kurulumun üzerine güncelleyin; kaldırma işlemi gerekmez.
 
 Uygulama yerel SQLite veritabanı kullanır. Veriler ve yedekler Windows kullanıcı veri dizininde saklanır. Programı güncellemeden veya farklı bir bilgisayara taşımadan önce Ayarlar > Yedekleme bölümünden manuel yedek alın ve **Dosyaya kaydet** ile `.ksbackup` dosyasını ayrı bir konumda saklayın. Yeni bilgisayarda **Dosyadan yedek yükle** ve ardından **Geri yükle** işlemlerini kullanın.
 
@@ -72,10 +72,10 @@ Yeni bir kullanıcı sürümü yayımlamak için önce `package.json` ve `backen
 
 ```powershell
 git add -A
-git commit -m "release: 0.5.8"
+git commit -m "release: 0.5.9"
 git push origin main
-git tag v0.5.8
-git push origin v0.5.8
+git tag v0.5.9
+git push origin v0.5.9
 ```
 
 Bu akışın çalışması için depo **public** olmalıdır. Private bir GitHub deposu, son kullanıcı bilgisayarına güvenli biçimde GitHub erişim anahtarı vermeden güncelleme indirmeyi desteklemez. Kaynak kodun private kalması gerekiyorsa, güncelleme paketleri için ayrı bir public release deposu veya kimlik doğrulamalı bir güncelleme sunucusu gerekir.

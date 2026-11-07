@@ -1,10 +1,10 @@
-# Kenan Şenocak Yönetim 0.5.8 — GitHub güncelleme altyapısı
+# Kenan Şenocak Yönetim 0.5.9 — güvenilir GitHub paketi
 
+- Windows kurulum paketi ve `latest.yml` güncelleme bildirimi bağımsız GitHub Release adımında birlikte yayımlanır.
 - Uygulama Ayarlar ekranına güncelleme denetleme, indirme ve yeniden başlatarak yükleme akışı eklendi.
-- Windows kurulum paketi ve güncelleme bildirimi GitHub Releases üzerinden otomatik yayımlanır.
 - Kaynak kodu ve sonraki geliştirmeler `mifXcup/KenanSenocakApp` deposuna gönderilir.
 
-## 0.5.7 — proje ürün toplamları
+## 0.5.8 / 0.5.7 — proje ürün toplamları
 
 - Proje ekleme ve düzenlemede detay alanı, ürün eklemede kapsam ve iş notları eklendi.
 - Teklif tutarları yazılırken binlik ayırıcı ekleniyor; ürün zorluğu Kolay, Orta, Zor olarak seçiliyor.

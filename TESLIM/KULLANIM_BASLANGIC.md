@@ -1,6 +1,6 @@
 # Kullanıma başlangıç
 
-1. KŞ açıksa kapatın. GitHub Releases'ten `Kenan Şenocak Yönetim Setup 0.5.8.exe` dosyasını çalıştırın; önceki kurulum varsa aynı kurulum konumunu seçin. Uygulamayı kaldırmanız gerekmez.
+1. KŞ açıksa kapatın. GitHub Releases'ten `Kenan Şenocak Yönetim Setup 0.5.9.exe` dosyasını çalıştırın; önceki kurulum varsa aynı kurulum konumunu seçin. Uygulamayı kaldırmanız gerekmez.
 2. Uygulamayı açın. İlk açılışta yerel veritabanı otomatik hazırlanır; eski kurulum varsa yükseltme öncesi yedek alınır.
 3. Ayarlar > Yedekleme bölümünden düzenli olarak manuel yedek alın; listedeki **Dosyaya kaydet** ile `.ksbackup` dosyasını ayrı bir konuma saklayın.
 4. Önce müşteri, proje, tedarikçi, malzeme ve personel kartlarını oluşturun. Ardından satın alma, tahsilat, puantaj ve gider kayıtlarını girin.
