@@ -1,6 +1,6 @@
 {
   "name": "kenan-senocak-yonetim",
-  "version": "0.5.9",
+  "version": "0.5.10",
   "private": true,
   "author": "Kenan Şenocak",
   "description": "Kenan Şenocak Yönetim masaüstü uygulaması",
@@ -16,8 +16,8 @@
     "build:ui": "npm --prefix frontend run build",
     "configure:update": "node scripts/configure-update.mjs",
     "build": "npm run build:icon && npm run build:backend && npm run build:ui && electron-builder --dir",
-    "dist": "npm run build:icon && npm run build:backend && npm run build:ui && electron-builder --win nsis",
-    "dist:publish": "npm run dist -- --publish always",
+    "dist": "npm run build:icon && npm run build:backend && npm run build:ui && electron-builder --win nsis --publish never",
+    "dist:publish": "npm run build:icon && npm run build:backend && npm run build:ui && electron-builder --win nsis --publish always",
     "test": "npm --prefix frontend run test && node --test desktop/main.test.cjs",
     "lint": "npm --prefix frontend run lint"
   },

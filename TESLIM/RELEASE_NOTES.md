@@ -1,6 +1,6 @@
-# Kenan Şenocak Yönetim 0.5.9 — güvenilir GitHub paketi
+# Kenan Şenocak Yönetim 0.5.10 — güvenilir GitHub paketi
 
-- Windows kurulum paketi ve `latest.yml` güncelleme bildirimi bağımsız GitHub Release adımında birlikte yayımlanır.
+- Windows kurulum paketi ve `latest.yml` güncelleme bildirimi bağımsız GitHub Release adımında birlikte yayımlanır; paketleyicinin otomatik yayınlaması kapatıldı.
 - Uygulama Ayarlar ekranına güncelleme denetleme, indirme ve yeniden başlatarak yükleme akışı eklendi.
 - Kaynak kodu ve sonraki geliştirmeler `mifXcup/KenanSenocakApp` deposuna gönderilir.
 
