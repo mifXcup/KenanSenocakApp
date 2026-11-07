@@ -1,4 +1,10 @@
-# Kenan Şenocak Yönetim 0.5.7 — proje ürün toplamları
+# Kenan Şenocak Yönetim 0.5.8 — GitHub güncelleme altyapısı
+
+- Uygulama Ayarlar ekranına güncelleme denetleme, indirme ve yeniden başlatarak yükleme akışı eklendi.
+- Windows kurulum paketi ve güncelleme bildirimi GitHub Releases üzerinden otomatik yayımlanır.
+- Kaynak kodu ve sonraki geliştirmeler `mifXcup/KenanSenocakApp` deposuna gönderilir.
+
+## 0.5.7 — proje ürün toplamları
 
 - Proje ekleme ve düzenlemede detay alanı, ürün eklemede kapsam ve iş notları eklendi.
 - Teklif tutarları yazılırken binlik ayırıcı ekleniyor; ürün zorluğu Kolay, Orta, Zor olarak seçiliyor.

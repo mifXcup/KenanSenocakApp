@@ -24,7 +24,7 @@ Bu sürüm bilinçli olarak KDV, iskonto ve ayrıntılı fatura/muhasebe işleml
 
 ## Kurulum
 
-`TESLIM/Kenan Şenocak Yönetim Setup 0.5.7.exe` dosyasını çalıştırın. 0.5.6 kuruluysa uygulamayı kapatıp aynı kurulum konumunu seçerek mevcut kurulumun üzerine güncelleyin; kaldırma işlemi gerekmez.
+`Kenan Şenocak Yönetim Setup 0.5.8.exe` dosyasını GitHub Releases sayfasından indirin. Önceki sürüm kuruluysa uygulamayı kapatıp aynı kurulum konumunu seçerek mevcut kurulumun üzerine güncelleyin; kaldırma işlemi gerekmez.
 
 Uygulama yerel SQLite veritabanı kullanır. Veriler ve yedekler Windows kullanıcı veri dizininde saklanır. Programı güncellemeden veya farklı bir bilgisayara taşımadan önce Ayarlar > Yedekleme bölümünden manuel yedek alın ve **Dosyaya kaydet** ile `.ksbackup` dosyasını ayrı bir konumda saklayın. Yeni bilgisayarda **Dosyadan yedek yükle** ve ardından **Geri yükle** işlemlerini kullanın.
 
