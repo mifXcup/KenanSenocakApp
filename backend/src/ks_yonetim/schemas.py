@@ -322,6 +322,7 @@ class PaymentCreate(BaseModel):
     purchase_id: str | None = None
     payment_date: date
     amount_kurus: int = Field(gt=0)
+    payment_method: PaymentMethod | None = None
     note: str | None = Field(default=None, max_length=2000)
     idempotency_key: str = Field(min_length=8, max_length=80)
 
@@ -332,6 +333,7 @@ class PaymentRead(OrmModel):
     purchase_id: str | None
     payment_date: date
     amount_kurus: int
+    payment_method: str | None
     note: str | None
     status: RecordStatus
 

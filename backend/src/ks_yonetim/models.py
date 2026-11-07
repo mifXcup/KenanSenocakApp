@@ -347,6 +347,7 @@ class Payment(TimestampMixin, Base):
     purchase_id: Mapped[str | None] = mapped_column(ForeignKey("purchases.id", ondelete="RESTRICT"))
     payment_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     amount_kurus: Mapped[int] = mapped_column(Integer, nullable=False)
+    payment_method: Mapped[str | None] = mapped_column(String(24))
     note: Mapped[str | None] = mapped_column(Text)
     idempotency_key: Mapped[str] = mapped_column(String(80), nullable=False, unique=True)
     status: Mapped[RecordStatus] = mapped_column(
@@ -748,6 +749,7 @@ class CustomerFinancialMovement(TimestampMixin, Base):
     movement_type: Mapped[str] = mapped_column(String(24), nullable=False, index=True)
     direction: Mapped[str] = mapped_column(String(24), nullable=False)
     amount_kurus: Mapped[int] = mapped_column(Integer, nullable=False)
+    payment_method: Mapped[str | None] = mapped_column(String(24))
     note: Mapped[str | None] = mapped_column(Text)
     idempotency_key: Mapped[str] = mapped_column(String(120), nullable=False, unique=True)
     # Bir hareket yalnız bir kez terslenebilir: veritabanı düzeyinde benzersizdir.

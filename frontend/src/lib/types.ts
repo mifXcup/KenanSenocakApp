@@ -154,6 +154,7 @@ export interface Payment {
   purchase_id: string | null
   payment_date: string
   amount_kurus: number
+  payment_method: 'cash' | 'bank_transfer' | 'other' | null
   note: string | null
   status: RecordStatus
 }

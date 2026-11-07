@@ -613,6 +613,7 @@ class CustomerMovementCreate(BaseModel):
     movement_type: MovementTypeName
     direction: Direction | None = None
     amount_kurus: int = Field(gt=0)
+    payment_method: Literal["cash", "bank_transfer", "other"] | None = None
     note: str | None = Field(default=None, max_length=2000)
     idempotency_key: str = Field(min_length=8, max_length=100)
 
@@ -631,6 +632,8 @@ class CustomerMovementCreate(BaseModel):
             raise ValueError("Ek iş yalnız tahakkuk hareketine bağlanabilir.")
         if self.receivable_schedule_id and self.movement_type != "collection":
             raise ValueError("Alacak planı yalnız tahsilat hareketine bağlanabilir.")
+        if self.payment_method and self.movement_type not in {"collection", "refund"}:
+            raise ValueError("Ödeme kanalı yalnız tahsilat veya iade için belirtilebilir.")
         return self
 
 
@@ -644,6 +647,7 @@ class CustomerMovementRead(OrmModel):
     movement_type: str
     direction: str
     amount_kurus: int
+    payment_method: str | None
     note: str | None
     idempotency_key: str
     reversed_movement_id: str | None
@@ -687,6 +691,7 @@ def _same_request(existing: CustomerFinancialMovement, payload: CustomerMovement
         and existing.movement_type == payload.movement_type
         and existing.direction == payload.direction
         and existing.amount_kurus == payload.amount_kurus
+        and existing.payment_method == payload.payment_method
         and existing.movement_date == payload.movement_date
         and existing.project_id == payload.project_id
         and existing.receivable_schedule_id == payload.receivable_schedule_id
