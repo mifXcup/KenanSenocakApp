@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useState } from 'react'
+import { Component, lazy, Suspense, useCallback, useEffect, useState, type ErrorInfo, type ReactNode } from 'react'
 import { HashRouter, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { AppShell } from './components/AppShell'
 import { MaterialsPage, PurchaseSheet, SettingsPage } from './pages'
@@ -15,6 +15,23 @@ const ProfitabilityPage = lazy(() => import('./profitability').then((m) => ({ de
 const PayrollPeriodsPage = lazy(() => import('./payrollPeriods').then((m) => ({ default: m.PayrollPeriodsPage })))
 const PurchasingPage = lazy(() => import('./supplierPurchasing').then((m) => ({ default: m.PurchasingPage })))
 const SupplierLedgerPage = lazy(() => import('./supplierPurchasing').then((m) => ({ default: m.SupplierLedgerPage })))
+
+class RouteErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+  state = { failed: false }
+
+  static getDerivedStateFromError() { return { failed: true } }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error('Sayfa yükleme hatası:', error, info)
+  }
+
+  render() {
+    if (this.state.failed) {
+      return <div className="page"><section className="status-panel status-panel--error" role="alert"><div><strong>Bu ekran açılamadı</strong><p>Beklenmeyen bir veri veya yükleme hatası oluştu. Ana sayfaya dönüp tekrar deneyin.</p></div><button className="button button--secondary" onClick={() => { window.location.hash = '#/' }}>Ana sayfaya dön</button></section></div>
+    }
+    return this.props.children
+  }
+}
 
 function AppContent() {
   const [purchaseOpen, setPurchaseOpen] = useState(false)
@@ -33,7 +50,7 @@ function AppContent() {
 
   return (
     <AppShell onQuickPurchase={openPurchase}>
-      <Suspense fallback={<div className="page" role="status">Yükleniyor…</div>}><Routes>
+      <RouteErrorBoundary key={location.pathname}><Suspense fallback={<div className="page" role="status">Yükleniyor…</div>}><Routes>
         <Route path="/" element={<TodayPage />} />
         <Route path="/is-takibi" element={<Navigate to="/projeler" replace />} />
         <Route path="/takvim" element={<CalendarPage />} />
@@ -49,7 +66,7 @@ function AppContent() {
         <Route path="/raporlar" element={<ReportCenterPage />} />
         <Route path="/akilli-ongoruler" element={<InsightsPage />} />
         <Route path="/ayarlar" element={<SettingsPage />} />
-      </Routes></Suspense>
+      </Routes></Suspense></RouteErrorBoundary>
       <PurchaseSheet open={purchaseOpen} onClose={closePurchase} />
     </AppShell>
   )

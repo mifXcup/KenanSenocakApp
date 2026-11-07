@@ -36,7 +36,8 @@ function ProjectProfitDetail({ project }: { project: Project }) {
   })
   const breakdown = useMemo(() => {
     if (!summary.data) return []
-    return summary.data.categories.map((item) => ({ key: item.category, label: item.category, value: item.actual_kurus }))
+    const categories = Array.isArray(summary.data.categories) ? summary.data.categories : []
+    return categories.map((item) => ({ key: item.category, label: item.category, value: item.actual_kurus }))
   }, [summary.data])
 
   if (summary.isLoading) return <div className="profit-detail"><LoadingRows count={7} /></div>
@@ -44,6 +45,7 @@ function ProjectProfitDetail({ project }: { project: Project }) {
   if (!summary.data) return null
 
   const data = summary.data
+  const warnings = Array.isArray(data.warnings) ? data.warnings : []
   const maximum = Math.max(...breakdown.map((item) => item.value), 1)
   return (
     <section className="profit-detail">
@@ -61,7 +63,7 @@ function ProjectProfitDetail({ project }: { project: Project }) {
         <SummaryMetric label="Bütçe farkı" value={formatMoney(data.budget_variance_kurus)} detail="Pozitif tutar kalan bütçedir" tone={profitTone(data.budget_variance_kurus)} />
       </div>
       <StatusBanner>Revize sözleşme {formatMoney(data.revised_contract_kurus)} · Net tahsilat {formatMoney(data.collections?.net_collected_kurus)} · Açık alacak {formatMoney(data.collections?.open_receivable_kurus)}</StatusBanner>
-      {data.warnings?.map((warning, index) => <p role="alert" key={index}>{warning.message}</p>)}
+      {warnings.map((warning, index) => <p role="alert" key={index}>{warning.message}</p>)}
       <div className="profit-grid">
         <section className="panel profit-breakdown">
           <header><div><h3>Maliyet dağılımı</h3><p>Bugüne kadar projeye bağlanan giderler</p></div><strong>{formatMoney(data.actual_cost_kurus)}</strong></header>
