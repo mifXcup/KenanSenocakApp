@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import json
+import base64
+import binascii
+import io
+import zipfile
 from datetime import UTC, date, datetime
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 
 from fastapi import APIRouter, Depends, Header, Query, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -23,8 +27,8 @@ from .models import (
     MovementType,
     Payment,
     Project,
+    ProjectContract,
     ProjectColor,
-    ProjectMeasurement,
     ProjectNote,
     ProjectTask,
     ProjectVisit,
@@ -51,9 +55,9 @@ from .schemas import (
     ProjectColorCreate,
     ProjectColorRead,
     ProjectCreate,
+    ProjectContractRead,
+    ProjectContractUpload,
     ProjectHubRead,
-    ProjectMeasurementCreate,
-    ProjectMeasurementRead,
     ProjectNoteCreate,
     ProjectNoteRead,
     ProjectRead,
@@ -75,6 +79,34 @@ from .schemas import (
 )
 
 router = APIRouter(prefix="/api/v1")
+
+
+def normalize_contract_price(data: dict, current: Project | None = None) -> None:
+    """Keep project finance in TL while preserving the agreed foreign amount."""
+    fields = {"contract_amount_kurus", "contract_currency", "contract_foreign_amount_minor", "contract_fx_rate"}
+    if current is not None and not fields.intersection(data):
+        return
+    currency = data.get("contract_currency", current.contract_currency if current else "TRY")
+    if currency == "TRY":
+        data["contract_foreign_amount_minor"] = None
+        data["contract_fx_rate"] = None
+        return
+    if current is not None and "contract_amount_kurus" in data and "contract_foreign_amount_minor" not in data and "contract_fx_rate" not in data:
+        raise ApiError("contract_fx_incomplete", "Dövizli fiyatı değiştirmek için döviz tutarını ve TL kurunu girin.", 422)
+    same_currency = current is not None and current.contract_currency == currency
+    original = data.get("contract_foreign_amount_minor", current.contract_foreign_amount_minor if same_currency else None)
+    rate = data.get("contract_fx_rate", current.contract_fx_rate if same_currency else None)
+    if original is None and rate is None:
+        data["contract_amount_kurus"] = None
+        return
+    if original is None or rate is None:
+        raise ApiError("contract_fx_incomplete", "Dövizli fiyat için tutar ve TL kuru birlikte girilmelidir.", 422)
+    converted = (Decimal(original) * rate).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+    if converted > 9_000_000_000_000_000:
+        raise ApiError("contract_fx_too_large", "Proje fiyatı çok yüksek.", 422)
+    data["contract_foreign_amount_minor"] = original
+    data["contract_fx_rate"] = rate
+    data["contract_amount_kurus"] = int(converted)
 
 
 class ApiError(Exception):
@@ -397,7 +429,8 @@ def list_materials(
 def create_project(payload: ProjectCreate, session: Session = Depends(get_session)) -> Project:
     from .customers import find_or_create_customer, get_customer
 
-    data = payload.model_dump(exclude={"customer_id"})
+    data = payload.model_dump(exclude={"customer_id", "contract_file"})
+    normalize_contract_price(data)
     if payload.customer_id:
         customer = get_customer(session, payload.customer_id)
         data["customer_name"] = customer.name
@@ -406,10 +439,94 @@ def create_project(payload: ProjectCreate, session: Session = Depends(get_sessio
     project = Project(**data, customer_id=customer.id)
     session.add(project)
     session.flush()
+    if payload.contract_file is not None:
+        session.add(_contract_from_upload(project.id, payload.contract_file))
     add_audit(session, "project", project.id, "created")
     session.commit()
     session.refresh(project)
     return project
+
+
+def _contract_from_upload(project_id: str, payload: ProjectContractUpload) -> ProjectContract:
+    file_name = payload.file_name.strip()
+    if not file_name or "/" in file_name or "\\" in file_name or any(ord(char) < 32 for char in file_name):
+        raise ApiError("invalid_contract_name", "Sözleşme dosya adı geçersiz.", 422)
+    extension = file_name.rsplit(".", 1)[-1].lower()
+    mime_types = {
+        "pdf": "application/pdf",
+        "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    }
+    if extension not in mime_types:
+        raise ApiError("invalid_contract_type", "Yalnız PDF veya DOCX sözleşme yüklenebilir.", 422)
+    try:
+        content = base64.b64decode(payload.content_base64, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ApiError("invalid_contract_file", "Sözleşme dosyası okunamadı.", 422) from exc
+    if not content or len(content) > 8 * 1024 * 1024:
+        raise ApiError("contract_file_size", "Sözleşme en fazla 8 MB olabilir.", 413)
+    if (extension == "pdf" and not content.startswith(b"%PDF-")) or (
+        extension == "docx" and not content.startswith(b"PK")
+    ):
+        raise ApiError("invalid_contract_file", "Dosya içeriği seçilen türle uyuşmuyor.", 422)
+    if extension == "docx":
+        try:
+            with zipfile.ZipFile(io.BytesIO(content)) as archive:
+                if not {"[Content_Types].xml", "word/document.xml"}.issubset(archive.namelist()):
+                    raise ApiError("invalid_contract_file", "Geçerli bir DOCX dosyası seçin.", 422)
+        except zipfile.BadZipFile as exc:
+            raise ApiError("invalid_contract_file", "Geçerli bir DOCX dosyası seçin.", 422) from exc
+    return ProjectContract(
+        project_id=project_id, file_name=file_name, mime_type=mime_types[extension],
+        size_bytes=len(content), content=content,
+    )
+
+
+@router.put(
+    "/projects/{project_id}/contract",
+    response_model=ProjectContractRead,
+    dependencies=[Depends(require_sidecar_token)],
+)
+def save_project_contract(
+    project_id: str, payload: ProjectContractUpload, session: Session = Depends(get_session)
+) -> ProjectContract:
+    require_active(session, Project, project_id, "Proje")
+    replacement = _contract_from_upload(project_id, payload)
+    current = session.get(ProjectContract, project_id)
+    if current is None:
+        session.add(replacement)
+        contract = replacement
+    else:
+        current.file_name = replacement.file_name
+        current.mime_type = replacement.mime_type
+        current.size_bytes = replacement.size_bytes
+        current.content = replacement.content
+        contract = current
+    add_audit(session, "project_contract", project_id, "updated", {"file_name": contract.file_name})
+    session.commit()
+    session.refresh(contract)
+    return contract
+
+
+@router.get(
+    "/projects/{project_id}/contract",
+    response_model=ProjectContractRead,
+    dependencies=[Depends(require_sidecar_token)],
+)
+def get_project_contract(project_id: str, session: Session = Depends(get_session)) -> ProjectContract:
+    require_active(session, Project, project_id, "Proje")
+    contract = session.get(ProjectContract, project_id)
+    if contract is None:
+        raise ApiError("contract_not_found", "Bu proje için sözleşme yüklenmemiş.", 404)
+    return contract
+
+
+@router.get(
+    "/projects/{project_id}/contract/file",
+    dependencies=[Depends(require_sidecar_token)],
+)
+def download_project_contract(project_id: str, session: Session = Depends(get_session)) -> Response:
+    contract = get_project_contract(project_id, session)
+    return Response(content=contract.content, media_type=contract.mime_type)
 
 
 @router.patch(
@@ -424,6 +541,7 @@ def update_project(
 
     project = require_active(session, Project, project_id, "Proje")
     changes = payload.model_dump(exclude_unset=True)
+    normalize_contract_price(changes, project)
     if changes.get("customer_id"):
         customer = get_customer(session, changes["customer_id"])
         changes["customer_name"] = customer.name
@@ -478,7 +596,6 @@ def get_project_hub(project_id: str, session: Session = Depends(get_session)):
         "notes": active_rows(ProjectNote, ProjectNote.created_at.desc()),
         "tasks": active_rows(ProjectTask, ProjectTask.created_at.desc()),
         "colors": active_rows(ProjectColor, ProjectColor.created_at.desc()),
-        "measurements": active_rows(ProjectMeasurement, ProjectMeasurement.measured_on.desc()),
         "visits": active_rows(ProjectVisit, ProjectVisit.visit_date.asc()),
     }
 
@@ -518,11 +635,6 @@ def update_project_task(task_id: str, payload: ProjectTaskUpdate, session: Sessi
 @router.post("/projects/{project_id}/colors", response_model=ProjectColorRead, status_code=201, dependencies=[Depends(require_sidecar_token)])
 def create_project_color(project_id: str, payload: ProjectColorCreate, session: Session = Depends(get_session)):
     return add_project_child(session, project_id, ProjectColor, payload, "Renk")
-
-
-@router.post("/projects/{project_id}/measurements", response_model=ProjectMeasurementRead, status_code=201, dependencies=[Depends(require_sidecar_token)])
-def create_project_measurement(project_id: str, payload: ProjectMeasurementCreate, session: Session = Depends(get_session)):
-    return add_project_child(session, project_id, ProjectMeasurement, payload, "Ölçü")
 
 
 @router.post("/projects/{project_id}/visits", response_model=ProjectVisitRead, status_code=201, dependencies=[Depends(require_sidecar_token)])
@@ -597,7 +709,17 @@ def create_purchase(
             )
         )
     add_audit(session, "purchase", purchase.id, "created", {"total_kurus": purchase.total_kurus})
-    session.commit()
+    try:
+        session.commit()
+    except IntegrityError:
+        # Aynı idempotency anahtarıyla eşzamanlı ikinci istek: kayıt zaten oluşmuştur.
+        session.rollback()
+        existing = session.scalar(
+            select(Purchase).where(Purchase.idempotency_key == payload.idempotency_key)
+        )
+        if existing is None:
+            raise
+        return to_purchase_detail(existing, purchase_paid(session, existing.id))
     session.refresh(purchase)
     return to_purchase_detail(purchase, payload.paid_kurus)
 
@@ -695,7 +817,16 @@ def create_payment(payload: PaymentCreate, session: Session = Depends(get_sessio
     session.add(payment)
     session.flush()
     add_audit(session, "payment", payment.id, "created", {"amount_kurus": payment.amount_kurus})
-    session.commit()
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        existing = session.scalar(
+            select(Payment).where(Payment.idempotency_key == payload.idempotency_key)
+        )
+        if existing is None:
+            raise
+        return existing
     session.refresh(payment)
     return payment
 

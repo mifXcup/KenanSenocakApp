@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Brain, CheckCircle, WarningCircle } from '@phosphor-icons/react'
-import { apiRequest, formatDate, formatMoney, toKurus } from './lib/api'
+import { apiList, apiRequest, formatDate, formatMoney, toKurus } from './lib/api'
 import type { Material, PricingLearningStatus } from './lib/types'
 import { Button, ErrorState, LoadingRows } from './components/ui'
 
@@ -10,7 +10,7 @@ const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Istanbul', ye
 export function PricingLearningPanel() {
   const queryClient = useQueryClient()
   const status = useQuery({ queryKey: ['pricing-status'], queryFn: () => apiRequest<PricingLearningStatus>('/api/v1/pricing/status') })
-  const materials = useQuery({ queryKey: ['materials'], queryFn: () => apiRequest<Material[]>('/api/v1/materials') })
+  const materials = useQuery({ queryKey: ['materials'], queryFn: () => apiList<Material>('/api/v1/materials') })
   const [label, setLabel] = useState('')
   const [materialId, setMaterialId] = useState('')
   const [date, setDate] = useState(today)

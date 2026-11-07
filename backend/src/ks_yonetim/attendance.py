@@ -661,9 +661,8 @@ def derive_due_date(period_end: date, salary_day: int) -> date:
 def salary_due_date(
     employee: Employee | None, period_end: date, settings: AttendanceSettings
 ) -> date | None:
-    """Personel istisnası > şirket varsayılanı; ikisi de yoksa None (eski davranış: dönem bitişi)."""
-    day = (employee.salary_day if employee else None) or settings.default_salary_day
-    return derive_due_date(period_end, day) if day else None
+    """İşletme maaş vadesi: kesimi izleyen ayın 10'u."""
+    return derive_due_date(period_end, 10)
 
 
 @router.get("/payroll-periods/{period_id}/salary-due-dates")
@@ -684,13 +683,13 @@ def period_salary_due_dates(period_id: str, session: Session = Depends(get_sessi
     return {
         "payroll_period_id": period.id,
         "period_end": period.period_end,
-        "default_salary_day": settings.default_salary_day,
+        "default_salary_day": 10,
         "employees": [
             {
                 "employee_id": e.id,
                 "employee_name": e.name,
-                "salary_day": e.salary_day or settings.default_salary_day,
-                "source": "employee" if e.salary_day else ("company" if settings.default_salary_day else "period_end"),
+                "salary_day": 10,
+                "source": "company_fixed",
                 "due_date": salary_due_date(e, period.period_end, settings) or period.period_end,
             }
             for e in employees

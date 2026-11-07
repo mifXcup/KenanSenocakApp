@@ -257,4 +257,5 @@ varsa hedef marj maliyet üzerine uygulanır, yoksa geçmiş satış fiyatı dü
 
 ### Alembic revizyonu
 
-13. `a5e2c7d9f1b3` product pricing engine (head). Yükseltme yolu testleri tüm ara revizyonlardan yeni head'e geçişi doğrular.
+13. `a5e2c7d9f1b3` product pricing engine.
+14. `b7d3f1a9c5e2` kart okuyucu: `employee_cards`, `attendance_events` (head). Yükseltme yolu testleri tüm ara revizyonlardan yeni head'e geçişi doğrular.

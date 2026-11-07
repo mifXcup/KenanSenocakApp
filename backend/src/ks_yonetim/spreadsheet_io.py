@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from .api import ApiError, add_audit, require_sidecar_token
 from .backup import backup_manager
 from .database import get_session
+from .exports import MIME_XLSX
 from .models import (
     Material,
     Project,
@@ -38,7 +39,7 @@ from .schemas import (
 )
 
 router = APIRouter(prefix="/api/v1", dependencies=[Depends(require_sidecar_token)])
-MIME_XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
 MAX_FILE_BYTES = 8 * 1024 * 1024
 MAX_UNCOMPRESSED_BYTES = 25 * 1024 * 1024
 MAX_ROWS = 5000

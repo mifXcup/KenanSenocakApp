@@ -48,7 +48,6 @@ from .wages import load_rate_book
 router = APIRouter(prefix="/api/v1", dependencies=[Depends(require_sidecar_token)])
 
 HOUR = Decimal("0.01")
-LEAVE_WORK_STATUSES = ("annual_leave", "sick_leave", "excused_leave", "paid_leave", "unpaid_leave")
 DEFAULT_LEAVE_TYPES = (
     ("annual", "Yıllık izin", "annual_leave", True),
     ("sick", "Raporlu", "sick_leave", False),

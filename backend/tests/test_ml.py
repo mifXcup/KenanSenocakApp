@@ -53,7 +53,7 @@ def test_local_models_detect_price_anomaly_reorder_and_project_risk(client):
     reorder = insight["reorder_forecasts"][0]
     assert reorder["median_interval_days"] == 7
     assert reorder["next_expected_date"] == "2026-10-06"
-    assert reorder["confidence"] == "high"
+    assert reorder["confidence"] == "medium"  # 4-5 kayıtla "yüksek" güven verilmez
 
     risk = insight["project_risks"][0]
     assert risk["project_id"] == project["id"]

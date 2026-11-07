@@ -117,10 +117,6 @@ def test_known_price_anomaly_is_explained_and_runs_are_deterministic(client):
     assert anomaly["latest_unit_price_kurus"] == 20000 and anomaly["expected_unit_price_kurus"] < 11000
     assert "anomali" in anomaly["explanation"]
 
-    first = client.post(f"{ML}/run", json={"as_of": "2026-10-01"}).json()
-    second = client.post(f"{ML}/run", json={"as_of": "2026-10-01"}).json()
-    assert [r["model_name"] for r in first["runs"]] == list(ml_module.MODEL_NAMES)
-
     def snapshot(run_ids):
         rows = []
         for run_id in run_ids:
@@ -129,7 +125,15 @@ def test_known_price_anomaly_is_explained_and_runs_are_deterministic(client):
                              item["confidence"], str(item["explanation"])))
         return sorted(rows)
 
-    assert snapshot([r["id"] for r in first["runs"]]) == snapshot([r["id"] for r in second["runs"]])
+    first = client.post(f"{ML}/run", json={"as_of": "2026-10-01"}).json()
+    assert [r["model_name"] for r in first["runs"]] == list(ml_module.MODEL_NAMES)
+    before = snapshot([r["id"] for r in first["runs"]])
+    count_before = len(client.get(f"{ML}/predictions", params={"limit": 500}).json())
+    second = client.post(f"{ML}/run", json={"as_of": "2026-10-01"}).json()
+
+    # Aynı gün ikinci çalıştırma aynı sonucu üretir ve tahmin satırı çoğaltmaz (değerlendirme çifte sayılmaz).
+    assert snapshot([r["id"] for r in second["runs"]]) == before
+    assert len(client.get(f"{ML}/predictions", params={"limit": 500}).json()) == count_before
     assert len(client.get(f"{ML}/runs").json()) == 12
     assert len(client.get(f"{ML}/runs", params={"model_name": "reorder"}).json()) == 2
     run = client.get(f"{ML}/runs", params={"model_name": "price_anomaly"}).json()[0]
@@ -145,7 +149,7 @@ def test_regular_and_irregular_reorder_intervals(client):
     for day in ["2026-07-01", "2026-07-04", "2026-08-20", "2026-08-22", "2026-09-30"]:
         buy(client, sup["id"], irregular["id"], day, 1000)
     forecasts = {f["material_name"]: f for f in insights(client, "2026-10-01")["reorder_forecasts"]}
-    assert forecasts["Düzenli"]["confidence"] == "high"
+    assert forecasts["Düzenli"]["confidence"] == "medium"  # az örnek: en çok orta
     assert forecasts["Düzenli"]["next_expected_date"] == "2026-10-06"
     assert forecasts["Düzensiz"]["confidence"] == "low"
     assert forecasts["Düzensiz"]["confidence_score"] < forecasts["Düzenli"]["confidence_score"]

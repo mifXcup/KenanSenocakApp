@@ -14,6 +14,7 @@ export function BackupCenter() {
   const client = useQueryClient()
   const [selected, setSelected] = useState<BackupRecord | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  const [transferBusy, setTransferBusy] = useState(false)
   const status = useQuery({ queryKey: queryKeys.backupStatus, queryFn: backupApi.status })
   const backups = useQuery({ queryKey: queryKeys.backups, queryFn: backupApi.list })
 
@@ -48,11 +49,33 @@ export function BackupCenter() {
 
   const error = status.error ?? backups.error ?? create.error ?? verify.error ?? restore.error
 
+  async function importBackup() {
+    if (!window.ksDesktop) return
+    setTransferBusy(true)
+    try {
+      const result = await window.ksDesktop.api.importBackup()
+      if (result.status === 'imported') { setNotice('Yedek aktarıldı ve doğrulandı. Geri yüklemek için listeden seçin.'); await refresh() }
+      else if (result.status === 'error') setNotice(result.message || 'Yedek aktarılamadı.')
+    } catch (reason) { setNotice(reason instanceof Error ? reason.message : 'Yedek aktarılamadı.') }
+    finally { setTransferBusy(false) }
+  }
+
+  async function exportBackup(backupId: string) {
+    if (!window.ksDesktop) return
+    setTransferBusy(true)
+    try {
+      const result = await window.ksDesktop.api.exportBackup(backupId)
+      if (result.status === 'saved') setNotice('Yedek dosyası kaydedildi. Ayrı bir yerde saklayın.')
+      else if (result.status === 'error') setNotice(result.message || 'Yedek kaydedilemedi.')
+    } catch (reason) { setNotice(reason instanceof Error ? reason.message : 'Yedek kaydedilemedi.') }
+    finally { setTransferBusy(false) }
+  }
+
   return (
     <section className="backup-center" aria-labelledby="backup-title">
       <div className="backup-center__header">
         <div><h2 id="backup-title">Yedekleme merkezi</h2><p>Yerel verinin güvenli kopyalarını oluşturun, doğrulayın ve gerektiğinde geri yükleyin.</p></div>
-        <Button variant="primary" loading={create.isPending} onClick={() => create.mutate()}><Database size={18} />Şimdi yedekle</Button>
+        <div className="p0-controls"><Button loading={transferBusy} onClick={importBackup}>Dosyadan yedek yükle</Button><Button variant="primary" loading={create.isPending} onClick={() => create.mutate()}><Database size={18} />Şimdi yedekle</Button></div>
       </div>
 
       {notice && <StatusBanner>{notice}</StatusBanner>}
@@ -82,6 +105,7 @@ export function BackupCenter() {
               <div><span className="badge badge--exact">{backupIntegrityLabel(backup.integrity)}</span></div>
               <div className="backup-row__size">{formatFileSize(backup.size_bytes)}</div>
               <div className="backup-row__actions">
+                <Button disabled={transferBusy} onClick={() => exportBackup(backup.backup_id)}>Dosyaya kaydet</Button>
                 <Button loading={verify.isPending && verify.variables === backup.backup_id} onClick={() => verify.mutate(backup.backup_id)}><CheckCircle size={17} />Doğrula</Button>
                 <Button variant="quiet" onClick={() => setSelected(backup)}><ArrowClockwise size={17} />Geri yükle</Button>
               </div>

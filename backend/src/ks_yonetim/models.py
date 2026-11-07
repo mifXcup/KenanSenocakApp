@@ -7,6 +7,7 @@ from decimal import Decimal
 
 from sqlalchemy import (
     JSON,
+    LargeBinary,
     Date,
     DateTime,
     Enum,
@@ -112,6 +113,9 @@ class Project(TimestampMixin, Base):
     # varsayılan (NO ACTION) kullanılır. Müşteri kartları silinmez, arşivlenir.
     customer_id: Mapped[str | None] = mapped_column(ForeignKey("customers.id"), index=True)
     contract_amount_kurus: Mapped[int | None] = mapped_column(Integer)
+    contract_currency: Mapped[str] = mapped_column(String(3), default="TRY", nullable=False)
+    contract_foreign_amount_minor: Mapped[int | None] = mapped_column(Integer)
+    contract_fx_rate: Mapped[Decimal | None] = mapped_column(Numeric(18, 6))
     budget_kurus: Mapped[int | None] = mapped_column(Integer)
     project_state: Mapped[str] = mapped_column(String(32), default="active", index=True)
     stage: Mapped[str] = mapped_column(String(32), default="planning", index=True)
@@ -123,6 +127,18 @@ class Project(TimestampMixin, Base):
     status: Mapped[RecordStatus] = mapped_column(
         Enum(RecordStatus), default=RecordStatus.ACTIVE, index=True
     )
+
+
+class ProjectContract(TimestampMixin, Base):
+    __tablename__ = "project_contracts"
+
+    project_id: Mapped[str] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), primary_key=True
+    )
+    file_name: Mapped[str] = mapped_column(String(180), nullable=False)
+    mime_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    content: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
 
 
 class ProjectNote(TimestampMixin, Base):
@@ -1096,3 +1112,42 @@ class NotificationDelivery(Base):
     channel: Mapped[str] = mapped_column(String(16), nullable=False)
     delivered_on: Mapped[date] = mapped_column(Date, nullable=False)
     delivered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class EmployeeCard(TimestampMixin, Base):
+    """Personele atanmış kart (RFID/NFC) numarası. UID tüm sistemde tek bir personele aittir."""
+
+    __tablename__ = "employee_cards"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    employee_id: Mapped[str] = mapped_column(
+        ForeignKey("employees.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    card_uid: Mapped[str] = mapped_column(String(32), nullable=False, unique=True)
+    status: Mapped[RecordStatus] = mapped_column(
+        Enum(RecordStatus), default=RecordStatus.ACTIVE, index=True
+    )
+
+
+class AttendanceEvent(Base):
+    """Kart okuyucudan gelen ham hareket. Puantaja ancak kullanıcı onayıyla dönüşür."""
+
+    __tablename__ = "attendance_events"
+    __table_args__ = (
+        Index("ix_attendance_event_employee_at", "employee_id", "event_at"),
+        Index("ix_attendance_event_uid_at", "card_uid", "event_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    event_key: Mapped[str] = mapped_column(String(120), nullable=False, unique=True)
+    device_id: Mapped[str | None] = mapped_column(String(60))
+    card_uid: Mapped[str] = mapped_column(String(32), nullable=False)
+    event_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    direction: Mapped[str | None] = mapped_column(String(8))
+    source: Mapped[str] = mapped_column(String(16), nullable=False, default="sheet")
+    employee_id: Mapped[str | None] = mapped_column(ForeignKey("employees.id", ondelete="RESTRICT"))
+    # pending: onay bekliyor · processed: puantaja işlendi · ignored: kullanıcı yok saydı
+    # duplicate: tekrar okuma penceresinde kaldı
+    state: Mapped[str] = mapped_column(String(12), nullable=False, default="pending", index=True)
+    work_log_id: Mapped[str | None] = mapped_column(ForeignKey("work_logs.id", ondelete="RESTRICT"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

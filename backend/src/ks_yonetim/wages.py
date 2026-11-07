@@ -44,9 +44,6 @@ class RateBook:
             return None
         return rate
 
-    def for_employee(self, employee_id: str) -> list[EmployeeWageRate]:
-        return list(self._rates.get(employee_id, []))
-
 
 def load_rate_book(session: Session, employee_ids: Iterable[str] | None = None) -> RateBook:
     query = select(EmployeeWageRate).where(EmployeeWageRate.status == RecordStatus.ACTIVE)

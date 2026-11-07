@@ -5,7 +5,7 @@ Bu sistem resmî bordro/SGK/vergi hesabı yapmaz; işletme içi maaş ve borç t
 Hesap kuralları (calculation_detail.rules içinde de yazılıdır):
 - daily: günlük ücret × normal saat / standart gün saati (kayıt yoksa ödeme yok).
 - hourly: saatlik ücret × normal saat.
-- monthly: dönemdeki her takvim günü için aylık ücret / o ayın gün sayısı (tam takvim ayı tam aylık ücrettir).
+- monthly: dönemdeki her takvim günü için aylık ücret / 30.
   Ücretsiz izin ve devamsızlık kayıtları o günün değerini düşer; kaydı olmayan günler çalışıldı sayılır.
 - fazla mesai: saatlik karşılık × fazla mesai saati × oran (dönem veya ayar), tüm ücret türlerinde.
 - manuel tutarlı puantaj (günlük/saatlik): manuel tutar o günün tamamı olarak taban kazanca yazılır.
@@ -24,7 +24,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from .api import ApiError, add_audit, require_sidecar_token
-from .attendance import assert_attendance_complete
+from .attendance import assert_attendance_complete, holiday_dates
 from .backup import BackupError, backup_manager
 from .database import get_session
 from .exports import Column, ReportTable, pdf_response, xlsx_response
@@ -45,7 +45,7 @@ from .wages import RateBook, load_rate_book
 router = APIRouter(prefix="/api/v1", dependencies=[Depends(require_sidecar_token)])
 
 RULES = {
-    "monthly": "takvim günü başına aylık/gün sayısı; ücretsiz izin ve devamsızlık günü düşer",
+    "monthly": "takvim günü başına aylık/30; tam dönemde aylık tutara uzunluk düzeltmesi; devamsızlık günü düşer",
     "daily": "günlük ücret × normal saat / standart gün saati",
     "hourly": "saatlik ücret × normal saat",
     "overtime": "saatlik karşılık × fazla mesai saati × oran",
@@ -80,6 +80,11 @@ class PeriodCreate(BaseModel):
             raise ValueError("Dönem bitişi başlangıçtan önce olamaz.")
         if (self.period_end - self.period_start).days > 365:
             raise ValueError("Bir maaş dönemi en fazla 366 gün olabilir.")
+        expected_month = (self.period_start.year + 1, 1) if self.period_start.month == 12 else (self.period_start.year, self.period_start.month + 1)
+        if self.period_start.day != 6 or self.period_end != date(*expected_month, 5):
+            raise ValueError("Maaş dönemi önceki ayın 6'sından bu ayın 5'ine kadar olmalıdır.")
+        if self.overtime_multiplier_percent not in (None, 150):
+            raise ValueError("Normal fazla mesai oranı %150'dir.")
         return self
 
 
@@ -133,7 +138,7 @@ class CalculateRequest(BaseModel):
 
 
 class FinalizeRequest(BaseModel):
-    payment_due_date: date | None = None
+    model_config = {"extra": "forbid"}
 
 
 class CloseRequest(BaseModel):
@@ -194,12 +199,17 @@ def compute_employee(
     advance_pool: int,
     advance_override: int | None,
     auto_advance: bool,
+    holidays: set[date] | None = None,
 ) -> dict | None:
     start, end = employee.employment_start_date, employee.employment_end_date
     base_exact = Decimal(0)  # monthly + hourly/daily hesaplanan
     manual_total = 0
     overtime_exact = Decimal(0)
     unpaid_exact = Decimal(0)
+    holiday_extra_exact = Decimal(0)
+    suggested_penalty_exact = Decimal(0)
+    daily_breakdown: list[dict] = []
+    monthly_daily_values: list[Decimal] = []
     normal_hours = overtime_hours = worked_days = Decimal(0)
     unpaid_days = 0
     manual_logs = 0
@@ -209,6 +219,7 @@ def compute_employee(
 
     for day in days:
         log = logs.get(day)
+        day_base = day_unpaid = day_overtime = day_special = Decimal(0)
         # Kısmi ücretsiz izin gününde çalışılan saatler (normal_hours > 0) ücretlendirilir.
         paid_log = log is not None and (
             log.work_status in PAID_STATUSES
@@ -229,9 +240,14 @@ def compute_employee(
             employed_days_with_rate += 1
             value = daily_equivalent(rate.rate_kurus, "monthly", day, settings)
             base_exact += value
+            monthly_daily_values.append(value)
+            day_base = value
             if log is not None and log.work_status in UNPAID_STATUSES:
-                unpaid_exact += value * _unpaid_fraction(log, settings)
+                day_unpaid = value * _unpaid_fraction(log, settings)
+                unpaid_exact += day_unpaid
                 unpaid_days += 1
+                if log.work_status == "absent":
+                    suggested_penalty_exact += value / 2
         elif not paid_log:
             continue
         else:
@@ -239,21 +255,41 @@ def compute_employee(
             assert log is not None
             if log.manual_amount_kurus is not None:
                 manual_total += log.manual_amount_kurus
+                day_base = Decimal(log.manual_amount_kurus)
                 manual_logs += 1
             else:
-                base_exact += hourly_equivalent(
+                day_base = hourly_equivalent(
                     rate.rate_kurus, rate.wage_type, day, settings
                 ) * log.normal_hours
+                base_exact += day_base
         if paid_log:
             assert log is not None
+            special_day = day.weekday() == 6 or day in (holidays or set())
+            # Aylık ücrette günün 1× tabanı zaten tahakkuk eder; çalışma için 1× eklenir.
+            if special_day and log.work_status in {"worked", "half_day", "overtime"}:
+                special_pay = hourly_equivalent(rate.rate_kurus, rate.wage_type, day, settings) * log.normal_hours
+                holiday_extra_exact += special_pay
+                day_special = special_pay
             normal_hours += log.normal_hours
             overtime_hours += log.overtime_hours
             worked_days += log.normal_hours / settings.standard_day_hours
             manual_replaces = log.manual_amount_kurus is not None and rate.wage_type != "monthly"
             if log.overtime_hours > 0 and not manual_replaces:
-                overtime_exact += overtime_pay(
-                    rate.rate_kurus, rate.wage_type, day, log.overtime_hours, settings, multiplier
+                day_overtime = overtime_pay(
+                    rate.rate_kurus, rate.wage_type, day, log.overtime_hours, settings, 200 if special_day else multiplier
                 )
+                overtime_exact += day_overtime
+        daily_breakdown.append({
+            "date": day.isoformat(),
+            "status": log.work_status if log else "no_log",
+            "daily_rate_kurus": to_kurus(daily_equivalent(rate.rate_kurus, rate.wage_type, day, settings)),
+            "hourly_rate_kurus": to_kurus(hourly_equivalent(rate.rate_kurus, rate.wage_type, day, settings)),
+            "base_kurus": to_kurus(day_base),
+            "absence_kurus": to_kurus(day_unpaid),
+            "overtime_kurus": to_kurus(day_overtime),
+            "sunday_holiday_extra_kurus": to_kurus(day_special),
+            "unnotified_absence_extra_for_review_kurus": to_kurus(day_unpaid / 2) if log and log.work_status == "absent" else 0,
+        })
 
     bonus = inputs.get("bonus", 0)
     additional = inputs.get("additional", 0)
@@ -263,8 +299,14 @@ def compute_employee(
     if employed_days_with_rate == 0 and not logs and not (bonus or additional or deduction):
         return None
 
-    base = to_kurus(base_exact - unpaid_exact) + manual_total
-    overtime = to_kurus(overtime_exact)
+    # Tam dönem aylık ücrette 28/31 takvim günü sözleşmedeki aylık tutarı değiştirmez.
+    # Günlük oran yine /30'dur; fark dönem sonunda açık bir düzeltme olarak gösterilir.
+    period_adjustment = (
+        sum(monthly_daily_values, Decimal(0)) / len(days) * (30 - len(days))
+        if len(monthly_daily_values) == len(days) else Decimal(0)
+    )
+    base = to_kurus(base_exact - unpaid_exact + period_adjustment) + manual_total
+    overtime = to_kurus(overtime_exact + holiday_extra_exact)
     gross = base + overtime + bonus + additional
     room = max(0, gross - deduction)
     warnings: list[str] = []
@@ -291,17 +333,21 @@ def compute_employee(
         "gross_earning_kurus": gross,
         "net_due_kurus": net,
         "calculation_detail": {
-            "version": 1,
+            "version": 2,
             "rules": RULES,
             "settings": {**settings.as_dict(), "overtime_multiplier_percent": multiplier},
             "unpaid_days": unpaid_days,
             "unpaid_deduction_kurus": to_kurus(unpaid_exact),
+            "period_length_adjustment_kurus": to_kurus(period_adjustment),
+            "sunday_holiday_extra_kurus": to_kurus(holiday_extra_exact),
+            "unnotified_absence_extra_for_review_kurus": to_kurus(suggested_penalty_exact),
             "manual_amount_logs": manual_logs,
             "manual_amount_kurus": manual_total,
             "advance_pool_kurus": advance_pool,
             "excess_deduction_kurus": max(0, deduction - gross),
             "missing_rate_days": missing_rate_days,
             "warnings": warnings,
+            "daily_breakdown": daily_breakdown,
         },
     }
 
@@ -310,8 +356,11 @@ def compute_period(
     session: Session, period: PayrollPeriod, request: CalculateRequest
 ) -> list[dict]:
     settings = load_settings(session)
-    multiplier = period.overtime_multiplier_percent or settings.overtime_multiplier_percent
+    # Aylık ücretin saatlik karşılığı işletme kuralı gereği (aylık/30)/9'dur.
+    settings = LaborSettings(settings.overtime_multiplier_percent, 9)
+    multiplier = 150
     days = _period_days(period)
+    holidays = holiday_dates(session, period.period_start, period.period_end)
     logs: dict[str, dict[date, WorkLog]] = defaultdict(dict)
     for log in session.scalars(
         select(WorkLog).where(
@@ -356,6 +405,7 @@ def compute_period(
             pools.get(employee.id, 0),
             request.advance_deductions.get(employee.id),
             request.auto_advance_deduction,
+            holidays,
         )
         if entry is not None:
             output.append(entry)
@@ -453,7 +503,7 @@ def create_period(payload: PeriodCreate, session: Session = Depends(get_session)
         period_start=payload.period_start,
         period_end=payload.period_end,
         title=payload.title or f"{payload.period_start} – {payload.period_end}",
-        overtime_multiplier_percent=payload.overtime_multiplier_percent,
+        overtime_multiplier_percent=150,
     )
     session.add(period)
     session.flush()
@@ -616,7 +666,7 @@ def finalize_period(
     period.state = "finalized"
     period.finalized_at = datetime.now(UTC)
     session.flush()
-    post_finalize_ledger(session, period, entries, payload.payment_due_date)
+    post_finalize_ledger(session, period, entries, None)
     refresh_entry_balances(session, period)
     add_audit(
         session,

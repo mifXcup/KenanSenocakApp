@@ -1,19 +1,28 @@
 {
   "name": "kenan-senocak-yonetim",
-  "version": "0.5.0",
+  "version": "0.5.7",
   "private": true,
   "author": "Kenan Şenocak",
   "description": "Kenan Şenocak Yönetim masaüstü uygulaması",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mifXcup/KenanSenocakApp.git"
+  },
   "main": "desktop/main.cjs",
   "scripts": {
     "dev": "concurrently -k -n UI,DESKTOP -c cyan,green \"npm --prefix frontend run dev -- --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && set VITE_DEV_SERVER_URL=http://127.0.0.1:5173&& electron .\"",
     "build:icon": "node scripts/build-icon.mjs",
     "build:backend": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-backend.ps1",
     "build:ui": "npm --prefix frontend run build",
+    "configure:update": "node scripts/configure-update.mjs",
     "build": "npm run build:icon && npm run build:backend && npm run build:ui && electron-builder --dir",
     "dist": "npm run build:icon && npm run build:backend && npm run build:ui && electron-builder --win nsis",
+    "dist:publish": "npm run dist -- --publish always",
     "test": "npm --prefix frontend run test && node --test desktop/main.test.cjs",
     "lint": "npm --prefix frontend run lint"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.11"
   },
   "devDependencies": {
     "concurrently": "^9.2.1",
@@ -32,6 +41,7 @@
     "files": [
       "desktop/**/*",
       "frontend/dist/**/*",
+      "build/icon.ico",
       "package.json"
     ],
     "extraResources": [
@@ -56,6 +66,12 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "Kenan Şenocak Yönetim"
-    }
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "releaseType": "release"
+      }
+    ]
   }
 }

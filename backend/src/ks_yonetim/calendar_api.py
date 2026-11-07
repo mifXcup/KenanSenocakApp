@@ -59,7 +59,6 @@ EVENT_TYPES = (
     "reminder",
 )
 FINANCIAL_TYPES = frozenset({"receivable_due", "supplier_payable", "payroll_due"})
-STATES = ("overdue", "today", "upcoming", "completed", "cancelled")
 OPEN_STATES = frozenset({"overdue", "today", "upcoming"})
 MAX_RANGE_DAYS = 400
 OVERDUE_HORIZON_DAYS = 730  # /today gecikmiş kaynak olaylar için geriye bakış

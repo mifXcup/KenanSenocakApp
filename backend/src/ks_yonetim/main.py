@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -10,6 +11,8 @@ from .api import ApiError, api_error_handler, router, validation_error_handler
 from .attendance import router as attendance_router
 from .backup import BackupError, backup_manager
 from .calendar_api import router as calendar_router
+from .card_reader import router as card_reader_router
+from .card_reader import run_scheduled_sync
 from .customers import router as customers_router
 from .database import ensure_schema
 from .employees import router as employees_router
@@ -30,23 +33,52 @@ from .staff_reports import router as staff_reports_router
 from .supplier_ledger import router as supplier_ledger_router
 from .worklogs import router as worklogs_router
 
+DAILY_BACKUP_CHECK_SECONDS = 3600
+
+
+def _run_daily_backup() -> None:
+    try:
+        backup_manager.ensure_daily_automatic()
+    except BackupError:
+        # Uygulama çalışır; sorun /backups/status üzerinden görünür kalır.
+        pass
+
+
+async def _daily_backup_loop() -> None:
+    # Uygulama günlerce açık kalırsa günlük otomatik yedek de her gün alınır.
+    while True:
+        await asyncio.sleep(DAILY_BACKUP_CHECK_SECONDS)
+        await asyncio.to_thread(_run_daily_backup)
+
+
+CARD_READER_CHECK_SECONDS = 60
+
+
+async def _card_reader_loop() -> None:
+    # Kart okuyucu eşitlemesi ayarlardan açıksa ve süre dolduysa Google Sheet'ten yeni hareketleri alır.
+    while True:
+        await asyncio.sleep(CARD_READER_CHECK_SECONDS)
+        await asyncio.to_thread(run_scheduled_sync)
+
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     ensure_schema()
+    _run_daily_backup()
+    tasks = [asyncio.create_task(_daily_backup_loop()), asyncio.create_task(_card_reader_loop())]
     try:
-        backup_manager.ensure_daily_automatic()
-    except BackupError:
-        # Uygulama açılır; sorun /backups/status üzerinden görünür kalır.
-        pass
-    yield
+        yield
+    finally:
+        for task in tasks:
+            task.cancel()
 
 
 app = FastAPI(
     title="Kenan Şenocak Yönetim Core",
-    version="0.5.0",
+    version="0.5.2",
     docs_url=None,
     redoc_url=None,
+    openapi_url=None,
     lifespan=lifespan,
 )
 app.add_exception_handler(ApiError, api_error_handler)
@@ -72,3 +104,4 @@ app.include_router(spreadsheet_router)
 app.include_router(ml_router)
 app.include_router(savings_router)
 app.include_router(pdf_router)
+app.include_router(card_reader_router)

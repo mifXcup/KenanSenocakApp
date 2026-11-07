@@ -2,15 +2,11 @@
 
 from __future__ import annotations
 
-import calendar
 from dataclasses import dataclass
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 
-from sqlalchemy import select
 from sqlalchemy.orm import Session
-
-from .models import AppSetting
 
 # Elle (puantaj ekranı / Excel) girilebilen durumlar.
 WORK_STATUSES = (
@@ -20,28 +16,28 @@ WORK_STATUSES = (
     "paid_leave",
     "unpaid_leave",
     "absent",
+    "notified_absent",
     "public_holiday",
     "weekly_rest",
 )
 # Yalnız izin talebi onayıyla üretilen durumlar (izin hak defteriyle tutarlı kalsın diye).
 LEAVE_MANAGED_STATUSES = frozenset({"annual_leave", "sick_leave", "excused_leave"})
-ALL_STATUSES = WORK_STATUSES + tuple(sorted(LEAVE_MANAGED_STATUSES))
 PAID_STATUSES = frozenset(
     {"worked", "half_day", "overtime", "paid_leave", "annual_leave", "public_holiday"}
 )
 # Ücretsiz: raporlu (işveren ödemez) ve mazeret izni de ücretsiz sayılır.
-UNPAID_STATUSES = frozenset({"unpaid_leave", "absent", "sick_leave", "excused_leave"})
+UNPAID_STATUSES = frozenset({"unpaid_leave", "absent", "notified_absent", "sick_leave", "excused_leave"})
 # Ücreti etkilemeyen takvim durumu: aylıkta kesinti yok, günlük/saatlikte ödeme yok.
 NEUTRAL_STATUSES = frozenset({"weekly_rest"})
 HOUR_QUANT = Decimal("0.01")
 
-SETTING_DEFAULTS = {"overtime_multiplier_percent": 150, "standard_day_hours": 8}
+SETTING_DEFAULTS = {"overtime_multiplier_percent": 150, "standard_day_hours": 9}
 
 
 @dataclass(frozen=True)
 class LaborSettings:
     overtime_multiplier_percent: int = 150
-    standard_day_hours: int = 8
+    standard_day_hours: int = 9
 
     def as_dict(self) -> dict[str, int]:
         return {
@@ -51,12 +47,7 @@ class LaborSettings:
 
 
 def load_settings(session: Session) -> LaborSettings:
-    stored = {
-        key: int(value)
-        for key, value in session.execute(select(AppSetting.key, AppSetting.value)).all()
-        if key in SETTING_DEFAULTS
-    }
-    return LaborSettings(**{**SETTING_DEFAULTS, **stored})
+    return LaborSettings()
 
 
 class HoursError(ValueError):
@@ -96,10 +87,6 @@ def normalize_hours(
     return normal.quantize(HOUR_QUANT), overtime.quantize(HOUR_QUANT)
 
 
-def days_in_month(day: date) -> int:
-    return calendar.monthrange(day.year, day.month)[1]
-
-
 def daily_equivalent(rate_kurus: int, wage_type: str, day: date, settings: LaborSettings) -> Decimal:
     """Bir tam gün normal çalışmanın değeri (yuvarlanmamış)."""
     rate = Decimal(rate_kurus)
@@ -107,7 +94,7 @@ def daily_equivalent(rate_kurus: int, wage_type: str, day: date, settings: Labor
         return rate
     if wage_type == "hourly":
         return rate * settings.standard_day_hours
-    return rate / days_in_month(day)  # monthly: takvim günü başına
+    return rate / 30  # işletme içi aylık ücret: sabit 30 günlük bölen
 
 
 def hourly_equivalent(rate_kurus: int, wage_type: str, day: date, settings: LaborSettings) -> Decimal:
@@ -146,10 +133,13 @@ def work_log_amount(
     normal_hours: Decimal,
     overtime_hours: Decimal,
     settings: LaborSettings,
+    special_day: bool = False,
 ) -> int:
     if status in UNPAID_STATUSES:
         return 0
     total = normal_pay(rate_kurus, wage_type, day, normal_hours, settings)
+    if special_day and status in {"worked", "half_day", "overtime"}:
+        total *= 2
     if overtime_hours > 0:
-        total += overtime_pay(rate_kurus, wage_type, day, overtime_hours, settings)
+        total += overtime_pay(rate_kurus, wage_type, day, overtime_hours, settings, 200 if special_day else 150)
     return to_kurus(total)

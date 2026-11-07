@@ -18,6 +18,7 @@ backend/migration-test.db
 backend/*.db-shm
 backend/*.db-wal
 *.log
+.codex-build.log
 .env
 .env.*
 !.env.example

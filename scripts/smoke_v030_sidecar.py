@@ -55,7 +55,7 @@ def main() -> None:
                 assert any(item["id"] == "p1" for item in response.json())
             conn = sqlite3.connect(db)
             try:
-                assert conn.execute("SELECT version_num FROM alembic_version").fetchone()[0] == "a5e2c7d9f1b3"
+                assert conn.execute("SELECT version_num FROM alembic_version").fetchone()[0] == "b7d3f1a9c5e2"
                 assert conn.execute("SELECT total_kurus,received_kurus,lifecycle_state FROM purchases").fetchone() == (120000, 120000, "received")
                 assert conn.execute("SELECT amount_kurus FROM payments").fetchone() == (20000,)
                 assert conn.execute("SELECT name FROM customers").fetchone()[0] == "Ahmet Yılmaz"

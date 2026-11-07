@@ -263,3 +263,23 @@ def test_reversal_can_be_dated_after_the_original(client):
     january = client.get(f"{API}/customers/{cid}/statement", params={"date_to": "2026-02-28"}).json()
     assert january["closing_balance_kurus"] == 60_000  # dönem ekstresi sonradan değişmez
     assert client.get(f"{API}/customers/{cid}/statement").json()["closing_balance_kurus"] == 100_000
+
+
+def test_customer_rename_updates_linked_project_names(client):
+    project = client.post(
+        "/api/v1/projects", json={"name": "Mutfak", "customer_name": "Eski Ad", "budget_kurus": 1000}
+    ).json()
+    customer_id = project["customer_id"]
+    renamed = client.patch(f"/api/v1/customers/{customer_id}", json={"name": "Yeni Ad"})
+    assert renamed.status_code == 200, renamed.text
+    projects = client.get("/api/v1/projects").json()
+    assert [item["customer_name"] for item in projects if item["id"] == project["id"]] == ["Yeni Ad"]
+
+
+def test_lists_page_past_default_limit(client):
+    for index in range(105):
+        assert client.post("/api/v1/suppliers", json={"name": f"Firma {index:03d}"}).status_code == 201
+    first = client.get("/api/v1/suppliers?limit=500&offset=0").json()
+    assert len(first) == 105
+    assert client.get("/api/v1/suppliers").json().__len__() == 100
+    assert len(client.get("/api/v1/suppliers?limit=500&offset=100").json()) == 5

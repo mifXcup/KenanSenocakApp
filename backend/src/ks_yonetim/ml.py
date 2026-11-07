@@ -40,8 +40,10 @@ from .models import (
     Supplier,
     WorkLog,
 )
+from .project_costs import OPENING_PREFIX
 from .project_finance import compute_profitability
 from .schemas import MLInsights, MLStatus, PriceAnomaly, ProjectRisk, ReorderForecast
+from .textnorm import match_key
 
 router = APIRouter(prefix="/api/v1/analytics/ml", dependencies=[Depends(require_sidecar_token)])
 
@@ -70,7 +72,7 @@ ModelName = Literal[
     "payroll_load",
     "employee_debt_risk",
 ]
-OPENING_PREFIX = "opening:"
+
 OPENING_MATERIAL = "Açılış Bakiyesi"
 
 
@@ -96,6 +98,24 @@ def linear_fit(points: list[tuple[float, float]]) -> tuple[float, float]:
     return mean_y - slope * mean_x, slope
 
 
+MAX_BASELINE_POINTS = 40
+
+
+def robust_fit(points: list[tuple[float, float]]) -> tuple[float, float]:
+    """Theil–Sen: eğim = ikili eğimlerin medyanı. Tek aykırı değer baz çizgiyi kaydırmaz."""
+    if len(points) == 1:
+        return points[0][1], 0.0
+    slopes = [
+        (y2 - y1) / (x2 - x1)
+        for index, (x1, y1) in enumerate(points)
+        for x2, y2 in points[index + 1 :]
+        if x2 != x1
+    ]
+    slope = median(slopes) if slopes else 0.0
+    intercept = median(y - slope * x for x, y in points)
+    return float(intercept), float(slope)
+
+
 def unit_price(purchase: Purchase) -> int:
     if purchase.unit_price_kurus is not None:
         return purchase.unit_price_kurus
@@ -108,9 +128,14 @@ def unit_price(purchase: Purchase) -> int:
 class PriceAnomalyOut(PriceAnomaly):
     explanation: str = ""
     first_date: date | None = None
+    # Kullanıcı "yanlış/faydasız" dediyse, yeni veri gelene kadar sinyal gizlenir.
+    dismissed: bool = False
+    user_feedback: str | None = None
 
 
-def price_insights(session: Session) -> tuple[list[PriceAnomalyOut], int]:
+def price_insights(
+    session: Session, as_of: date | None = None
+) -> tuple[list[PriceAnomalyOut], int]:
     series: dict[tuple[str, str], list[tuple[date, int]]] = defaultdict(list)
     names: dict[str, str] = {}
     unit_labels: dict[tuple[str, str], str] = {}
@@ -122,11 +147,12 @@ def price_insights(session: Session) -> tuple[list[PriceAnomalyOut], int]:
             Purchase.quantity.is_not(None),
             Purchase.quantity > 0,
             Purchase.unit.is_not(None),
+            *([Purchase.purchase_date <= as_of] if as_of is not None else []),
         )
         .order_by(Purchase.purchase_date, Purchase.created_at, Purchase.id)
     )
     for purchase, material_name in rows:
-        key = (purchase.material_id, purchase.unit.strip().casefold())  # birimler karışmaz
+        key = (purchase.material_id, match_key(purchase.unit))  # birimler karışmaz
         series[key].append((purchase.purchase_date, unit_price(purchase)))
         unit_labels.setdefault(key, purchase.unit)
         names[purchase.material_id] = material_name
@@ -138,13 +164,15 @@ def price_insights(session: Session) -> tuple[list[PriceAnomalyOut], int]:
             continue
         material_id = key[0]
         unit = unit_labels[key]
-        history = values[:-1]
+        history = values[:-1][-MAX_BASELINE_POINTS:]
         points = [(float(index), float(price)) for index, (_, price) in enumerate(history)]
-        intercept, slope = linear_fit(points)
+        intercept, slope = robust_fit(points)
         expected = max(0, round(intercept + slope * len(history)))
         residuals = [price - (intercept + slope * index) for index, (_, price) in enumerate(history)]
         baseline = max(float(median(price for _, price in history)) * 0.05, 1.0)
-        scale = max(pstdev(residuals) if len(residuals) > 1 else 0.0, baseline)
+        # Ölçek de dayanıklıdır (MAD): tek aykırı geçmiş değer eşiği şişirmez.
+        mad = median(abs(r - median(residuals)) for r in residuals) * 1.4826 if residuals else 0.0
+        scale = max(mad, baseline)
         latest_date, latest_price = values[-1]
         score = abs(latest_price - expected) / scale
         deviation = ((latest_price - expected) / expected * 100) if expected else 0.0
@@ -187,12 +215,20 @@ class ReorderOut(ReorderForecast):
     # Yalnız satın alma sıklığından türetilir; stok miktarı, tükenme veya sipariş önerisi değildir.
     basis: str = "purchase_interval"
     stock_claim: bool = False
+    # Son alıştan bu yana geçen süre medyan aralığın çok üzerindeyse seri kesilmiş olabilir.
+    stale: bool = False
+    days_since_last: int = 0
+    dismissed: bool = False
+    user_feedback: str | None = None
     disclaimer: str = (
         "Bu tahmin geçmiş satın alma tarihlerine dayanır; stok miktarı veya tükenme iddiası "
         "içermez ve otomatik sipariş oluşturmaz."
     )
     first_date: date | None = None
     last_date: date | None = None
+
+
+STALE_INTERVAL_FACTOR = 3
 
 
 def reorder_insights(session: Session, as_of: date) -> tuple[list[ReorderOut], int]:
@@ -217,9 +253,20 @@ def reorder_insights(session: Session, as_of: date) -> tuple[list[ReorderOut], i
         spread = pstdev(intervals) if len(intervals) > 1 else 0
         variation = spread / interval if interval else 1
         # Düzensiz seride güven düşer: hem etiket hem sayısal skor değişim katsayısına bağlıdır.
-        label = "high" if variation <= 0.25 else "medium" if variation <= 0.6 else "low"
+        # Etiket yalnız düzenliliğe değil örnek sayısına da bağlıdır (4 kayıtla "yüksek" denmez).
+        if variation <= 0.25 and len(dates) >= 6:
+            label = "high"
+        elif variation <= 0.6:
+            label = "medium"
+        else:
+            label = "low"
         score = round(max(0.05, 1 - variation) * min(1.0, len(dates) / 8), 3)
         expected = dates[-1] + timedelta(days=interval)
+        days_since_last = (as_of - dates[-1]).days
+        stale = days_since_last > interval * STALE_INTERVAL_FACTOR
+        if stale:
+            label = "low"
+            score = min(score, 0.2)
         output.append(
             ReorderOut(
                 material_id=material_id,
@@ -231,10 +278,17 @@ def reorder_insights(session: Session, as_of: date) -> tuple[list[ReorderOut], i
                 confidence=label,
                 confidence_score=score,
                 irregularity=round(variation, 3),
+                stale=stale,
+                days_since_last=days_since_last,
                 explanation=(
                     f"{names[material_id]} için {len(dates)} farklı alış tarihinin medyan aralığı "
                     f"{interval} gün; son alış {dates[-1]}, beklenen sonraki alış {expected}. "
                     f"Aralık değişkenliği {round(variation, 2)} ({label})."
+                    + (
+                        f" Son alıştan bu yana {days_since_last} gün geçti (medyan aralığın "
+                        f"{STALE_INTERVAL_FACTOR} katından fazla): düzenli alım kesilmiş olabilir."
+                        if stale else ""
+                    )
                 ),
                 first_date=dates[0],
                 last_date=dates[-1],
@@ -258,6 +312,8 @@ class ProjectRiskOut(ProjectRisk):
     commitment_kurus: int = 0
     forecast_source: str = "auto"
     budget_basis: str = "project_budget"
+    dismissed: bool = False
+    user_feedback: str | None = None
 
 
 def project_events(session: Session, project_id: str, upto: date) -> list[tuple[date, int]]:
@@ -312,12 +368,12 @@ def project_insights(session: Session, as_of: date) -> tuple[list[ProjectRiskOut
         .order_by(Project.name, Project.id)
     ).all()
     for project in projects:
+        events = project_events(session, project.id, as_of)
+        if len(events) < MIN_PROJECT_EVENTS:
+            continue  # pahalı kârlılık hesabı yalnız yeterli geçmişi olan projeler için yapılır
         profit = compute_profitability(session, project)
         budget = profit["revised_budget_kurus"] or 0
         if budget <= 0:
-            continue
-        events = project_events(session, project.id, as_of)
-        if len(events) < MIN_PROJECT_EVENTS:
             continue
         ready_count += 1
         first_date = events[0][0]
@@ -396,7 +452,7 @@ def supplier_comparisons(session: Session, as_of: date) -> tuple[list[dict], int
         )
         .order_by(Purchase.purchase_date, Purchase.created_at, Purchase.id)
     ):
-        key = (purchase.material_id, purchase.unit.strip().casefold())
+        key = (purchase.material_id, match_key(purchase.unit))
         series[key].append(
             (
                 purchase.purchase_date,
@@ -507,7 +563,11 @@ def payroll_forecast(session: Session, as_of: date) -> tuple[dict | None, int]:
     closed = list(
         session.scalars(
             select(PayrollPeriod)
-            .where(PayrollPeriod.status == RecordStatus.ACTIVE, PayrollPeriod.state == "closed")
+            .where(
+                PayrollPeriod.status == RecordStatus.ACTIVE,
+                PayrollPeriod.state == "closed",
+                PayrollPeriod.period_end <= as_of,
+            )
             .order_by(PayrollPeriod.period_start)
         )
     )
@@ -759,12 +819,51 @@ def model_summaries(
     ]
 
 
+DISMISSING_FEEDBACK = ("wrong", "not_useful")
+
+
+def apply_feedback(session: Session, prices, reorders, projects) -> None:
+    """Kullanıcı bir tahmine "yanlış/faydasız" dediyse aynı seri/proje için sinyal `dismissed` olur.
+
+    Gizleme, geri bildirim verildiği andaki örnek sayısına bağlıdır: yeni veri gelince (örnek sayısı
+    değişince) sinyal yeniden değerlendirilir. Hesaplanan değerler değişmez; yalnız dikkat listesinden çıkar.
+    """
+    rows = session.execute(
+        select(
+            MlPrediction.prediction_type,
+            MlPrediction.entity_id,
+            MlPrediction.user_feedback,
+            MlPrediction.explanation,
+        )
+        .where(
+            MlPrediction.user_feedback.is_not(None),
+            MlPrediction.prediction_type.in_(("price_anomaly", "reorder", "project_budget_risk")),
+        )
+        .order_by(MlPrediction.prediction_date, MlPrediction.created_at, MlPrediction.id)
+    ).all()
+    latest = {(ptype, entity): (feedback, (explanation or {}).get("sample_count")) for ptype, entity, feedback, explanation in rows}
+
+    def mark(items, ptype, entity_of):
+        for item in items:
+            found = latest.get((ptype, entity_of(item)))
+            if found is None:
+                continue
+            feedback, samples = found
+            item.user_feedback = feedback
+            item.dismissed = feedback in DISMISSING_FEEDBACK and samples == item.sample_count
+
+    mark(prices, "price_anomaly", lambda r: f"{r.material_id}|{match_key(r.unit)}")
+    mark(reorders, "reorder", lambda r: r.material_id)
+    mark(projects, "project_budget_risk", lambda r: r.project_id)
+
+
 @router.get("/insights", response_model=MLInsightsOut)
 def ml_insights(as_of: date | None = None, session: Session = Depends(get_session)):
     effective_date = as_of or clock.business_today()
-    prices, price_ready = price_insights(session)
+    prices, price_ready = price_insights(session, effective_date)
     reorders, reorder_ready = reorder_insights(session, effective_date)
     projects, project_ready = project_insights(session, effective_date)
+    apply_feedback(session, prices, reorders, projects)
     suppliers, supplier_ready = supplier_comparisons(session, effective_date)
     forecast, closed_periods = payroll_forecast(session, effective_date)
     debts, debt_employees = debt_risks(session, effective_date)
@@ -827,11 +926,11 @@ def _model_output(session: Session, name: str, as_of: date):
     """(tahminler, eğitim_başı, eğitim_sonu, örnek_sayısı, parametreler, metrikler)"""
     in_30 = as_of + timedelta(days=30)
     if name == "price_anomaly":
-        rows, ready = price_insights(session)
+        rows, ready = price_insights(session, as_of)
         preds = [
             (
                 "material_unit",
-                f"{r.material_id}|{r.unit.strip().casefold()}",
+                f"{r.material_id}|{match_key(r.unit)}",
                 in_30,
                 r.next_expected_unit_price_kurus,
                 min(1.0, r.sample_count / 12),
@@ -894,7 +993,7 @@ def _model_output(session: Session, name: str, as_of: date):
         preds = [
             (
                 "material_unit",
-                f"{r['material_id']}|{r['unit'].strip().casefold()}",
+                f"{r['material_id']}|{match_key(r['unit'])}",
                 None,
                 r["saving_percent"],
                 r["confidence_score"],
@@ -979,18 +1078,38 @@ def run_model(session: Session, name: str, as_of: date) -> MlRun:
     )
     session.add(run)
     session.flush()
+    # Aynı gün aynı varlık için ikinci çalıştırma yeni satır eklemez; mevcut tahmin güncellenir
+    # (geri bildirim korunur, değerlendirme çifte sayılmaz).
+    existing = {
+        row.entity_id: row
+        for row in session.scalars(
+            select(MlPrediction).where(
+                MlPrediction.prediction_type == name, MlPrediction.prediction_date == as_of
+            )
+        )
+    }
     for entity_type, entity_id, target, value, confidence, explanation in preds:
+        values = {
+            "ml_run_id": run.id,
+            "target_date": target,
+            "predicted_value": None if value is None else round(float(value), 4),
+            "confidence": None if confidence is None else round(float(confidence), 4),
+            "explanation": _json_safe(explanation),
+        }
+        row = existing.get(entity_id)
+        if row is not None:
+            for key, item in values.items():
+                setattr(row, key, item)
+            row.actual_value = None
+            row.evaluated_at = None
+            continue
         session.add(
             MlPrediction(
-                ml_run_id=run.id,
                 prediction_type=name,
                 entity_type=entity_type,
                 entity_id=entity_id,
                 prediction_date=as_of,
-                target_date=target,
-                predicted_value=None if value is None else round(float(value), 4),
-                confidence=None if confidence is None else round(float(confidence), 4),
-                explanation=_json_safe(explanation),
+                **values,
             )
         )
     return run
@@ -1013,7 +1132,7 @@ def _actual_for(session: Session, prediction: MlPrediction, as_of: date) -> floa
             .order_by(Purchase.purchase_date, Purchase.created_at, Purchase.id)
         )
         for (purchase,) in rows:
-            if purchase.unit and purchase.unit.strip().casefold() == unit and purchase.quantity:
+            if purchase.unit and match_key(purchase.unit) == unit and purchase.quantity:
                 return float(unit_price(purchase))
         return None
     if ptype == "reorder":

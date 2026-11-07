@@ -21,7 +21,13 @@ from .api import ApiError, require_sidecar_token
 from .customers import advance_split, customer_buckets, effective_rows
 from .database import get_session
 from .labor_cost import load_settings
-from .ml import MIN_PRICE_SAMPLES, price_insights, supplier_comparisons, usable_purchases
+from .ml import (
+    MIN_PRICE_SAMPLES,
+    apply_feedback,
+    price_insights,
+    supplier_comparisons,
+    usable_purchases,
+)
 from .models import (
     Customer,
     CustomerFinancialMovement,
@@ -39,6 +45,7 @@ from .models import (
     WorkLog,
 )
 from .project_finance import collect_cost_sources, compute_profitability
+from .textnorm import match_key
 
 router = APIRouter(prefix="/api/v1/analytics", dependencies=[Depends(require_sidecar_token)])
 
@@ -61,6 +68,19 @@ def tl(kurus: int) -> str:
 
 def source(source_type: str, source_id: str, amount_kurus: int | None = None, **extra) -> dict:
     return {"source_type": source_type, "source_id": source_id, "amount_kurus": amount_kurus, **extra}
+
+
+# saving: ödeme/tedarik tasarrufu · cost_risk: oluşabilecek ek maliyet · receivable: tahsil edilecek tutar
+GROUP_OF = {
+    "price_anomaly": "saving",
+    "cheaper_supplier": "saving",
+    "budget_overrun": "cost_risk",
+    "overtime_concentration": "cost_risk",
+    "rework_increase": "cost_risk",
+    "uncollected_change_order": "receivable",
+    "unlinked_customer_advance": "receivable",
+    "unlinked_expense": "record_quality",
+}
 
 
 def opportunity(
@@ -143,11 +163,14 @@ def budget_overruns(session: Session, projects: list[Project]) -> list[dict]:
     return found
 
 
-def price_anomalies(session: Session) -> list[dict]:
-    rows, _ = price_insights(session)
+def price_anomalies(session: Session, as_of: date | None = None) -> list[dict]:
+    rows, _ = price_insights(session, as_of)
+    apply_feedback(session, rows, [], [])
     found = []
     for row in rows:
         if not row.is_anomaly or row.latest_unit_price_kurus <= row.expected_unit_price_kurus:
+            continue
+        if row.dismissed:  # kullanıcı "yanlış/faydasız" dedi; yeni veri gelene kadar fırsat sayılmaz
             continue
         latest = session.execute(
             select(Purchase)
@@ -161,7 +184,7 @@ def price_anomalies(session: Session) -> list[dict]:
         impact = int((Decimal(gap) * quantity).quantize(Decimal(1))) if quantity else None
         found.append(
             opportunity(
-                "price_anomaly", f"{row.material_id}:{row.unit.strip().casefold()}",
+                "price_anomaly", f"{row.material_id}:{match_key(row.unit)}",
                 "high" if row.anomaly_score >= 5 else "medium",
                 f"{row.material_name}: beklenenden pahalı alım",
                 (
@@ -188,7 +211,7 @@ def cheaper_suppliers(session: Session, as_of: date) -> list[dict]:
     for row in rows:
         if not row["comparable"]:
             continue
-        unit_key = row["unit"].strip().casefold()
+        unit_key = match_key(row["unit"])
         spend, sources = 0, []
         for receipt, purchase in session.execute(
             select(PurchaseReceipt, Purchase)
@@ -199,7 +222,7 @@ def cheaper_suppliers(session: Session, as_of: date) -> list[dict]:
                    Purchase.supplier_id != row["cheapest_supplier_id"],
                    PurchaseReceipt.receipt_date >= since, PurchaseReceipt.receipt_date <= as_of)
         ):
-            if (purchase.unit or "").strip().casefold() == unit_key:
+            if match_key(purchase.unit or "") == unit_key:
                 spend += receipt.amount_kurus
                 sources.append(source("purchase_receipt", receipt.id, receipt.amount_kurus, purchase_id=purchase.id))
         percent = row["saving_percent"]
@@ -475,7 +498,7 @@ def savings_opportunities(
     items = budget_overruns(session, projects) + rework_increases(session, projects, day)
     items += uncollected_change_orders(session, projects, day)
     if not project_id:
-        items += price_anomalies(session) + cheaper_suppliers(session, day)
+        items += price_anomalies(session, day) + cheaper_suppliers(session, day)
         items += overtime_concentration(session, day) + unlinked_expenses(session)
         items += unlinked_advances(session, day)
     limit = SEVERITY_ORDER[min_severity]
@@ -486,6 +509,11 @@ def savings_opportunities(
         slot = by_type.setdefault(item["type"], {"count": 0, "estimated_impact_kurus": 0})
         slot["count"] += 1
         slot["estimated_impact_kurus"] += item["estimated_impact_kurus"] or 0
+    by_group: dict[str, dict] = {}
+    for item in items:
+        slot = by_group.setdefault(GROUP_OF.get(item["type"], "record_quality"), {"count": 0, "estimated_impact_kurus": 0})
+        slot["count"] += 1
+        slot["estimated_impact_kurus"] += item["estimated_impact_kurus"] or 0
     return {
         "as_of": day,
         "read_only": True,
@@ -493,6 +521,8 @@ def savings_opportunities(
         "count": len(items),
         "total_estimated_impact_kurus": sum(i["estimated_impact_kurus"] or 0 for i in items),
         "by_type": by_type,
+        # Toplam farklı nitelikte kalemleri karıştırır; gerçek tasarruf, maliyet riski ve alacak ayrı okunmalı.
+        "by_group": by_group,
         "by_severity": {s: sum(1 for i in items if i["severity"] == s) for s in SEVERITY_ORDER},
         "opportunities": items,
     }

@@ -113,8 +113,9 @@ def test_actual_cost_uses_target_margin_and_quantity(client):
     )
     response = client.post(f"/api/v1/project-products/{target['id']}/suggestions")
     assert response.status_code == 201, response.text
-    # 80.000 gerçek maliyet × 2 miktar × %25 hedef marj
-    assert response.json()["suggested_mid_kurus"] == 20_000_000
+    # 80.000 gerçek maliyet × 2 miktar = 160.000 TL maliyet; %25 hedef marj satış fiyatı üzerindendir:
+    # 160.000 / (1 − 0,25) = 213.333,33 TL
+    assert response.json()["suggested_mid_kurus"] == 21_333_333
 
 
 def test_suggestion_requires_matching_history_and_factor_shares_are_guarded(client):

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from statistics import median
 from typing import Literal
@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from . import clock
 from .api import ApiError, add_audit, require_active, require_sidecar_token
 from .database import get_session
+from .ml import usable_purchases
 from .models import (
     Material,
     PricingIndexEntry,
@@ -23,9 +24,22 @@ from .models import (
     Purchase,
     RecordStatus,
 )
+from .textnorm import match_key
 
 router = APIRouter(prefix="/api/v1", dependencies=[Depends(require_sidecar_token)])
 MODEL_VERSION = "1.0"
+# Öneride yalnız gerçek teklif geçmişi kullanılır: taslak ve reddedilmiş kayıtlar dışarıda.
+USABLE_PRICING_STATES = ("offered", "accepted", "completed")
+STALE_PRICE_DAYS = 180
+_CONFIDENCE_ORDER = ("low", "medium", "high")
+
+
+def _lower_confidence(level: str) -> str:
+    return _CONFIDENCE_ORDER[max(0, _CONFIDENCE_ORDER.index(level) - 1)]
+
+
+def _cap_confidence(level: str, ceiling: str) -> str:
+    return _CONFIDENCE_ORDER[min(_CONFIDENCE_ORDER.index(level), _CONFIDENCE_ORDER.index(ceiling))]
 
 
 class CostFactorInput(BaseModel):
@@ -50,7 +64,7 @@ class ProjectProductCreate(BaseModel):
     quoted_total_kurus: int | None = Field(default=None, ge=0)
     accepted_total_kurus: int | None = Field(default=None, ge=0)
     actual_cost_kurus: int | None = Field(default=None, ge=0)
-    target_margin_percent: Decimal = Field(default=Decimal(25), ge=0, le=200)
+    target_margin_percent: Decimal = Field(default=Decimal(25), ge=0, lt=95)
     pricing_state: Literal["draft", "offered", "accepted", "rejected", "completed"] = "draft"
     note: str | None = Field(default=None, max_length=2000)
     factors: list[CostFactorInput] = Field(default_factory=list, max_length=20)
@@ -66,8 +80,10 @@ class ProjectProductCreate(BaseModel):
 
 
 class ProjectProductUpdate(BaseModel):
+    product_type: str | None = Field(default=None, min_length=2, max_length=120)
     description: str | None = Field(default=None, max_length=280)
     quantity: Decimal | None = Field(default=None, gt=0, decimal_places=3)
+    unit: str | None = Field(default=None, min_length=1, max_length=24)
     finish: str | None = Field(default=None, max_length=120)
     hardware_level: str | None = Field(default=None, max_length=80)
     complexity_percent: int | None = Field(default=None, ge=50, le=200)
@@ -75,7 +91,7 @@ class ProjectProductUpdate(BaseModel):
     quoted_total_kurus: int | None = Field(default=None, ge=0)
     accepted_total_kurus: int | None = Field(default=None, ge=0)
     actual_cost_kurus: int | None = Field(default=None, ge=0)
-    target_margin_percent: Decimal | None = Field(default=None, ge=0, le=200)
+    target_margin_percent: Decimal | None = Field(default=None, ge=0, lt=95)
     pricing_state: Literal["draft", "offered", "accepted", "rejected", "completed"] | None = None
     note: str | None = Field(default=None, max_length=2000)
     factors: list[CostFactorInput] | None = Field(default=None, max_length=20)
@@ -236,6 +252,14 @@ def update_project_product(
     return _product_dict(session, product)
 
 
+@router.delete("/project-products/{product_id}", status_code=204)
+def delete_project_product(product_id: str, session: Session = Depends(get_session)):
+    product = require_active(session, ProjectProduct, product_id, "Ürün")
+    product.status = RecordStatus.ARCHIVED
+    add_audit(session, "project_product", product.id, "deleted", {"project_id": product.project_id})
+    session.commit()
+
+
 @router.post("/pricing/indices", status_code=201)
 def create_pricing_index(payload: PricingIndexCreate, session: Session = Depends(get_session)):
     if payload.material_id:
@@ -263,15 +287,27 @@ def _current_factor_price(
     if factor.material_id:
         purchases = session.scalars(
             select(Purchase)
+            .join(Material, Material.id == Purchase.material_id)
             .where(
+                # Yalnız teslim alınmış, açılış bakiyesi olmayan alımlar "güncel fiyat" sayılır.
+                *usable_purchases(),
                 Purchase.material_id == factor.material_id,
-                Purchase.status == RecordStatus.ACTIVE,
                 Purchase.purchase_date <= as_of,
                 Purchase.quantity.is_not(None),
                 Purchase.quantity > 0,
+                Purchase.unit.is_not(None),
             )
             .order_by(Purchase.purchase_date.desc(), Purchase.created_at.desc())
         ).all()
+        # Referans fiyatın birimiyle karşılaştır: referans tarihine en yakın alımın birimi esas alınır,
+        # başka birimdeki (örn. kg) alımlar levha fiyatını bozmasın.
+        if purchases:
+            anchor = min(
+                purchases,
+                key=lambda p: (abs((p.purchase_date - factor.reference_date).days), p.purchase_date),
+            )
+            wanted = match_key(anchor.unit)
+            purchases = [p for p in purchases if match_key(p.unit) == wanted]
         for purchase in purchases:
             price = _purchase_unit_price(purchase)
             if price and price > 0:
@@ -297,8 +333,8 @@ def _normalized_comparable(
 ) -> dict:
     sale_price = candidate.accepted_total_kurus or candidate.quoted_total_kurus
     assert sale_price is not None
-    base = candidate.actual_cost_kurus or sale_price
-    using_actual_cost = candidate.actual_cost_kurus is not None
+    using_actual_cost = bool(candidate.actual_cost_kurus and candidate.actual_cost_kurus > 0)
+    base = candidate.actual_cost_kurus if using_actual_cost else sale_price
     factors = _factors(session, candidate.id)
     factor_share = Decimal(0)
     factor_multiplier = Decimal(0)
@@ -331,9 +367,10 @@ def _normalized_comparable(
     complexity_ratio = Decimal(target.complexity_percent) / Decimal(candidate.complexity_percent)
     normalized_cost = Decimal(base) * multiplier * quantity_ratio * complexity_ratio
     if using_actual_cost:
-        normalized = normalized_cost * (
-            Decimal(1) + Decimal(target.target_margin_percent) / Decimal(100)
-        )
+        # Hedef marj SATIŞ FİYATI üzerindendir: fiyat = maliyet / (1 − marj). (Eskiden maliyete eklenen
+        # yüzde olarak hesaplanıyordu; %25 "marj" gerçekte %20 marja denk geliyordu.)
+        margin = min(Decimal(target.target_margin_percent), Decimal(94))
+        normalized = normalized_cost / (Decimal(1) - margin / Decimal(100))
     else:
         normalized = normalized_cost
     return {
@@ -368,14 +405,17 @@ def create_pricing_suggestion(
                 ProjectProduct.id != target.id,
             )
         )
-        if row.product_type.strip().casefold() == target.product_type.strip().casefold()
-        and row.unit.strip().casefold() == target.unit.strip().casefold()
+        if match_key(row.product_type) == match_key(target.product_type)
+        and match_key(row.unit) == match_key(target.unit)
         and (row.accepted_total_kurus or row.quoted_total_kurus)
+        # Gelecek tarihli, taslak ve reddedilmiş teklifler öneriyi kaydırmasın.
+        and row.quote_date <= effective_date
+        and row.pricing_state in USABLE_PRICING_STATES
     ]
     if not candidates:
         raise ApiError(
             "pricing_history_insufficient",
-            "Bu ürün türü ve birimi için fiyatı bulunan geçmiş bir ürün kaydı gerekiyor.",
+            "Bu ürün türü ve birimi için fiyatı bulunan, taslak/reddedilmemiş ve tarihi gelecekte olmayan geçmiş bir ürün kaydı gerekiyor.",
             409,
             {"product_type": target.product_type, "unit": target.unit},
         )
@@ -386,9 +426,15 @@ def create_pricing_suggestion(
     values = sorted(item["normalized_price_kurus"] for item in comparables)
     mid = int(Decimal(str(median(values))).quantize(Decimal(1), ROUND_HALF_UP))
     deviations = [abs(value - mid) / mid for value in values] if mid else [0]
-    spread = min(0.25, max(0.08, (sum(deviations) / len(deviations)) + 0.05))
-    low = round(mid * (1 - spread))
-    high = round(mid * (1 + spread))
+    model_spread = min(0.25, max(0.08, (sum(deviations) / len(deviations)) + 0.05))
+    low = round(mid * (1 - model_spread))
+    high = round(mid * (1 + model_spread))
+    # Aralık, benzer kayıtların gerçek dağılımını kapsar: veriler 10M ile 90M arasındaysa öneri dar görünmez.
+    if len(values) >= 2:
+        low = min(low, values[0])
+        high = max(high, values[-1])
+    spread = ((high - low) / 2 / mid) if mid else model_spread
+    dispersion_ratio = (values[-1] / values[0]) if values[0] > 0 else None
     actual_count = sum(bool(item["used_actual_cost"]) for item in comparables)
     factor_count = sum(bool(item["factors"]) for item in comparables)
     if len(comparables) >= 6 and actual_count >= 3 and factor_count >= 3:
@@ -397,6 +443,31 @@ def create_pricing_suggestion(
         confidence = "medium"
     else:
         confidence = "low"
+
+    all_factors = [factor for item in comparables for factor in item["factors"]]
+    total_share = sum(factor["share_percent"] for factor in all_factors)
+    fallback_share = sum(
+        factor["share_percent"] for factor in all_factors if factor["current_source"] == "reference_fallback"
+    )
+    fallback_heavy = total_share > 0 and fallback_share / total_share >= 0.5
+    stale_cutoff = effective_date - timedelta(days=STALE_PRICE_DAYS)
+    stale_factors = [
+        factor for factor in all_factors
+        if factor["current_source"] != "reference_fallback" and date.fromisoformat(factor["current_date"]) < stale_cutoff
+    ]
+    extreme_quantity = [
+        item for item in comparables if item["quantity_ratio"] > 3 or item["quantity_ratio"] < 1 / 3
+    ]
+    wide_spread = dispersion_ratio is not None and dispersion_ratio > 2
+    moderate_spread = dispersion_ratio is not None and dispersion_ratio > 1.5
+    if wide_spread:
+        confidence = "low"
+    elif moderate_spread:
+        confidence = _cap_confidence(confidence, "medium")
+    if fallback_heavy:
+        confidence = _lower_confidence(confidence)
+    if len(extreme_quantity) * 2 > len(comparables):
+        confidence = _lower_confidence(confidence)
     explanation = {
         "as_of": effective_date.isoformat(),
         "method": "historical_comparable_cost_indexation",
@@ -405,6 +476,7 @@ def create_pricing_suggestion(
         "target_complexity_percent": target.complexity_percent,
         "target_margin_percent": float(target.target_margin_percent),
         "spread_percent": round(spread * 100, 2),
+        "dispersion_ratio": round(dispersion_ratio, 2) if dispersion_ratio is not None else None,
         "comparables": comparables,
         "warnings": [
             warning
@@ -412,6 +484,10 @@ def create_pricing_suggestion(
                 (factor_count == 0, "Geçmiş kayıtlarda maliyet payı yok; fiyat artışı doğrulanamadı."),
                 (actual_count == 0, "Gerçekleşen maliyet yok; öneri geçmiş satış fiyatlarına dayanıyor."),
                 (len(comparables) < 3, "Benzer kayıt sayısı düşük; öneri aralığını dikkatle değerlendirin."),
+                (moderate_spread, "Benzer kayıtların fiyatları birbirinden çok farklı; aralık bu farkı kapsar, öneriyi dikkatle değerlendirin."),
+                (fallback_share > 0, "Bazı maliyet payları için güncel fiyat bulunamadı; referans fiyat kullanıldı (fiyat değişimi %0 sayıldı)."),
+                (bool(stale_factors), f"Bazı güncel fiyatlar {STALE_PRICE_DAYS} günden eski; güncel alış veya endeks girin."),
+                (bool(extreme_quantity), "Miktar farkı büyük (3 kattan fazla); doğrusal ölçekleme güvenilmez."),
             )
             if condition
         ],

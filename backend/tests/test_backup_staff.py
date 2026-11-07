@@ -50,13 +50,13 @@ def seed(client):
 
 def test_new_backups_carry_current_version_and_schema_revision(client):
     created = client.post("/api/v1/backups").json()
-    assert created["app_version"] == __version__ == "0.5.0"
+    assert created["app_version"] == __version__
     assert created["schema_revision"] == migrate.head_revision()
     path = get_settings().data_dir / "backups" / created["backup_id"]
     metadata = json.loads(path.with_suffix(".json").read_text(encoding="utf-8"))
-    assert metadata["app_version"] == "0.5.0"
+    assert metadata["app_version"] == __version__
     assert metadata["schema_revision"] == migrate.head_revision()
-    assert client.post(f"/api/v1/backups/{created['backup_id']}/verify").json()["app_version"] == "0.5.0"
+    assert client.post(f"/api/v1/backups/{created['backup_id']}/verify").json()["app_version"] == __version__
 
     # Eski (sürüm 0.2.0) metadata dosyaları schema_revision olmadan da okunur.
     metadata.pop("schema_revision")

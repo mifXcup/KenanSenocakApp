@@ -6,7 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from .models import EmployeePaymentType, ExpenseCategory, MovementType, RecordStatus, TrackingMode
+from .models import ExpenseCategory, MovementType, RecordStatus, TrackingMode
 
 
 class OrmModel(BaseModel):
@@ -75,13 +75,30 @@ class MaterialRead(OrmModel):
     status: RecordStatus
 
 
+class ProjectContractUpload(BaseModel):
+    file_name: str = Field(min_length=1, max_length=180)
+    content_base64: str = Field(min_length=1, max_length=11_200_000)
+
+
+class ProjectContractRead(OrmModel):
+    project_id: str
+    file_name: str
+    mime_type: str
+    size_bytes: int
+
+
 class ProjectCreate(BaseModel):
     name: str = Field(min_length=2, max_length=180)
     customer_name: str = Field(min_length=2, max_length=180)
     # Verilirse müşteri kartı esas alınır ve customer_name karttaki adla eşitlenir.
     customer_id: str | None = None
     contract_amount_kurus: int | None = Field(default=None, ge=0)
+    contract_currency: Literal["TRY", "USD", "EUR", "GBP"] = "TRY"
+    contract_foreign_amount_minor: int | None = Field(default=None, ge=0)
+    contract_fx_rate: Decimal | None = Field(default=None, gt=0, max_digits=18, decimal_places=6)
     budget_kurus: int | None = Field(default=None, ge=0)
+    contract_file: ProjectContractUpload | None = None
+    project_state: Literal["active", "completed"] = "active"
     stage: Literal["planning", "design", "approval", "production", "delivery", "installation", "completed"] = "planning"
     progress_percent: int = Field(default=0, ge=0, le=100)
     accent_color: str = Field(default="#9A5A3A", min_length=4, max_length=16)
@@ -95,6 +112,9 @@ class ProjectUpdate(BaseModel):
     customer_name: str | None = Field(default=None, min_length=2, max_length=180)
     customer_id: str | None = None
     contract_amount_kurus: int | None = Field(default=None, ge=0)
+    contract_currency: Literal["TRY", "USD", "EUR", "GBP"] | None = None
+    contract_foreign_amount_minor: int | None = Field(default=None, ge=0)
+    contract_fx_rate: Decimal | None = Field(default=None, gt=0, max_digits=18, decimal_places=6)
     budget_kurus: int | None = Field(default=None, ge=0)
     project_state: Literal["active", "completed", "cancelled"] | None = None
     stage: Literal["planning", "design", "approval", "production", "delivery", "installation", "completed"] | None = None
@@ -108,7 +128,7 @@ class ProjectUpdate(BaseModel):
     def validate_patch(self) -> ProjectUpdate:
         if not self.model_fields_set:
             raise ValueError("En az bir alan gönderilmelidir.")
-        required = {"name", "customer_name", "project_state"}
+        required = {"name", "customer_name", "project_state", "contract_currency"}
         for field_name in required & self.model_fields_set:
             if getattr(self, field_name) is None:
                 raise ValueError(f"{field_name} boş bırakılamaz.")
@@ -121,6 +141,9 @@ class ProjectRead(OrmModel):
     customer_name: str
     customer_id: str | None = None
     contract_amount_kurus: int | None
+    contract_currency: str
+    contract_foreign_amount_minor: int | None
+    contract_fx_rate: Decimal | None
     budget_kurus: int | None
     project_state: str
     stage: str
@@ -185,27 +208,6 @@ class ProjectColorRead(OrmModel):
     created_at: datetime
 
 
-class ProjectMeasurementCreate(BaseModel):
-    space_name: str = Field(min_length=2, max_length=180)
-    label: str = Field(min_length=2, max_length=180)
-    value: str = Field(min_length=1, max_length=80)
-    unit: str = Field(default="cm", min_length=1, max_length=24)
-    measured_on: date
-    note: str | None = Field(default=None, max_length=2000)
-
-
-class ProjectMeasurementRead(OrmModel):
-    id: str
-    project_id: str
-    space_name: str
-    label: str
-    value: str
-    unit: str
-    measured_on: date
-    note: str | None
-    created_at: datetime
-
-
 class ProjectVisitCreate(BaseModel):
     visit_date: date
     purpose: str = Field(min_length=2, max_length=280)
@@ -228,7 +230,6 @@ class ProjectHubRead(BaseModel):
     notes: list[ProjectNoteRead]
     tasks: list[ProjectTaskRead]
     colors: list[ProjectColorRead]
-    measurements: list[ProjectMeasurementRead]
     visits: list[ProjectVisitRead]
 
 
@@ -667,6 +668,7 @@ WorkStatus = Literal[
     "paid_leave",
     "unpaid_leave",
     "absent",
+    "notified_absent",
     "public_holiday",
     "weekly_rest",
 ]
@@ -781,24 +783,6 @@ class WorkLogImportResult(BaseModel):
     backup_id: str
 
 
-class EmployeePaymentCreate(BaseModel):
-    employee_id: str
-    payment_date: date
-    amount_kurus: int = Field(gt=0)
-    payment_type: EmployeePaymentType
-    note: str | None = Field(default=None, max_length=2000)
-
-
-class EmployeePaymentRead(OrmModel):
-    id: str
-    employee_id: str
-    payment_date: date
-    amount_kurus: int
-    payment_type: EmployeePaymentType
-    note: str | None
-    status: RecordStatus
-
-
 class ProjectExpenseCreate(BaseModel):
     project_id: str
     site_id: str | None = None
@@ -818,20 +802,6 @@ class ProjectExpenseRead(OrmModel):
     description: str | None
     status: RecordStatus
 
-
-class ProjectCostSummary(BaseModel):
-    project_id: str
-    purchase_kurus: int
-    labor_kurus: int
-    shipping_kurus: int
-    installation_kurus: int
-    site_kurus: int
-    other_kurus: int
-    total_cost_kurus: int
-    budget_kurus: int | None
-    budget_variance_kurus: int | None
-    contract_amount_kurus: int | None
-    estimated_profit_kurus: int | None
 
 
 class SpreadsheetFilePayload(BaseModel):

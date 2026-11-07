@@ -212,6 +212,9 @@ def update_customer(
     before = {key: getattr(customer, key) for key in changes}
     for key, value in changes.items():
         setattr(customer, key, value)
+    if "name" in changes:
+        for project in session.scalars(select(Project).where(Project.customer_id == customer.id)):
+            project.customer_name = customer.name
     add_audit(session, "customer", customer.id, "updated", {"before": before, "after": changes})
     try:
         session.commit()
@@ -283,13 +286,6 @@ def effective_rows(rows: list[CustomerFinancialMovement]) -> list[CustomerFinanc
     """Ters satırlar ve hükümsüz kalan orijinaller çıkarılmış hareketler."""
     voided = {r.reversed_movement_id for r in rows if r.movement_type == "reversal"}
     return [r for r in rows if r.movement_type != "reversal" and r.id not in voided]
-
-
-def ledger_balance(
-    session: Session, customer_id: str, as_of: date | None = None, project_id: str | None = None
-) -> int:
-    # Ters satır zıt işaretli olduğundan tüm aktif satırların toplamı etkin bakiyeye eşittir.
-    return sum(signed(r) for r in _active_rows(session, customer_id, as_of=as_of, project_id=project_id))
 
 
 def allocation_totals(

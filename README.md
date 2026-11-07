@@ -24,9 +24,9 @@ Bu sürüm bilinçli olarak KDV, iskonto ve ayrıntılı fatura/muhasebe işleml
 
 ## Kurulum
 
-`TESLIM/Kenan Şenocak Yönetim Setup 0.5.0.exe` dosyasını çalıştırın.
+`TESLIM/Kenan Şenocak Yönetim Setup 0.5.7.exe` dosyasını çalıştırın. 0.5.6 kuruluysa uygulamayı kapatıp aynı kurulum konumunu seçerek mevcut kurulumun üzerine güncelleyin; kaldırma işlemi gerekmez.
 
-Uygulama yerel SQLite veritabanı kullanır. Veriler ve yedekler Windows kullanıcı veri dizininde saklanır. Programı güncellemeden veya farklı bir bilgisayara taşımadan önce Ayarlar > Yedekleme bölümünden manuel yedek alın.
+Uygulama yerel SQLite veritabanı kullanır. Veriler ve yedekler Windows kullanıcı veri dizininde saklanır. Programı güncellemeden veya farklı bir bilgisayara taşımadan önce Ayarlar > Yedekleme bölümünden manuel yedek alın ve **Dosyaya kaydet** ile `.ksbackup` dosyasını ayrı bir konumda saklayın. Yeni bilgisayarda **Dosyadan yedek yükle** ve ardından **Geri yükle** işlemlerini kullanın.
 
 Kurulum paketi henüz ticari bir kod imzalama sertifikasıyla imzalanmadığı için Windows ilk çalıştırmada yayıncı uyarısı gösterebilir.
 
@@ -55,6 +55,32 @@ Windows kurulum paketi:
 ```powershell
 npm run dist
 ```
+
+## GitHub ile yayınlama ve uygulama içi güncelleme
+
+Kaynak kodu GitHub deposunda tutulur; kullanıcıya dağıtılan Windows kurulum paketleri ise GitHub Releases üzerinden yayınlanır. Kurulu uygulamadaki **Ayarlar > Uygulama güncellemesi** kartı yeni sürümü denetler, kullanıcı onayıyla indirir ve yeniden başlatıldığında kurar. Yerel SQLite verisi güncelleme sırasında silinmez; yine de her yayın öncesi yedek alınmalıdır.
+
+Bu proje için uzak depo `https://github.com/mifXcup/KenanSenocakApp.git` olarak ayarlanmıştır. İlk gönderim ve sonraki günlük geliştirme akışı:
+
+```powershell
+git add -A
+git commit -m "Açıklayıcı değişiklik notu"
+git push origin main
+```
+
+Yeni bir kullanıcı sürümü yayımlamak için önce `package.json` ve `backend/pyproject.toml` içindeki sürümleri aynı değere yükseltin. Ardından etiketi gönderin; GitHub Actions Windows paketini, `latest.yml` güncelleme bildirimini ve kurulum `.exe` dosyasını otomatik olarak GitHub Release'e yükler:
+
+```powershell
+git add -A
+git commit -m "release: 0.5.8"
+git push origin main
+git tag v0.5.8
+git push origin v0.5.8
+```
+
+Bu akışın çalışması için depo **public** olmalıdır. Private bir GitHub deposu, son kullanıcı bilgisayarına güvenli biçimde GitHub erişim anahtarı vermeden güncelleme indirmeyi desteklemez. Kaynak kodun private kalması gerekiyorsa, güncelleme paketleri için ayrı bir public release deposu veya kimlik doğrulamalı bir güncelleme sunucusu gerekir.
+
+İlk ticari dağıtımdan önce Windows kod imzalama sertifikası eklenmelidir. Sertifika olmadan güncelleme teknik olarak çalışır, ancak Windows SmartScreen yayıncı uyarısı gösterebilir.
 
 ## Yerel tahmin modelleri
 

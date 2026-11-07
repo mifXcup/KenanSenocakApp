@@ -3,7 +3,7 @@ import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { Archive, MagnifyingGlass, Plus } from '@phosphor-icons/react'
 import { Button } from './ui'
 import { useQuery } from '@tanstack/react-query'
-import { apiRequest } from '../lib/api'
+import { apiList } from '../lib/api'
 import type { Employee, Material, Project, Supplier } from '../lib/types'
 import { navigationGroups, navigationLabel } from '../appNavigation'
 
@@ -12,11 +12,11 @@ export function AppShell({ children, onQuickPurchase }: { children: ReactNode; o
   const [searchValue, setSearchValue] = useState('')
   const location = useLocation()
   const navigate = useNavigate()
-  const suppliers = useQuery({ queryKey: ['search-suppliers'], queryFn: () => apiRequest<Supplier[]>('/api/v1/suppliers?limit=500') })
-  const projects = useQuery({ queryKey: ['search-projects'], queryFn: () => apiRequest<Project[]>('/api/v1/projects?limit=500') })
-  const materials = useQuery({ queryKey: ['search-materials'], queryFn: () => apiRequest<Material[]>('/api/v1/materials?limit=500') })
-  const customers = useQuery({ queryKey: ['search-customers'], queryFn: () => apiRequest<Array<{ id: string; name: string; phone: string | null }>>('/api/v1/customers?limit=500') })
-  const employees = useQuery({ queryKey: ['search-employees'], queryFn: () => apiRequest<Employee[]>('/api/v1/employees?limit=500') })
+  const suppliers = useQuery({ queryKey: ['search-suppliers'], queryFn: () => apiList<Supplier>('/api/v1/suppliers') })
+  const projects = useQuery({ queryKey: ['search-projects'], queryFn: () => apiList<Project>('/api/v1/projects') })
+  const materials = useQuery({ queryKey: ['search-materials'], queryFn: () => apiList<Material>('/api/v1/materials') })
+  const customers = useQuery({ queryKey: ['search-customers'], queryFn: () => apiList<{ id: string; name: string; phone: string | null }>('/api/v1/customers') })
+  const employees = useQuery({ queryKey: ['search-employees'], queryFn: () => apiList<Employee>('/api/v1/employees') })
   const searchResults = useMemo(() => {
     const term = searchValue.trim().toLocaleLowerCase('tr-TR')
     if (term.length < 2) return []
@@ -53,19 +53,19 @@ export function AppShell({ children, onQuickPurchase }: { children: ReactNode; o
   return (
     <div className="app-shell">
       <aside className="sidebar">
-        <div className="brand"><span className="brand__mark">KŞ</span><span><strong>Kenan Şenocak</strong><small>Yönetim</small></span></div>
+        <div className="brand"><span className="brand__mark">KŞ<span className="brand__registered">®</span></span><span><strong>Kenan Şenocak</strong><small>Yönetim sistemi / 01</small></span></div>
         <nav aria-label="Ana navigasyon">
-          {navigationGroups.map((group) => <div className="nav-group" key={group.label}><span className="nav-group__label">{group.label}</span>{group.items.map(({ to, label, icon: Icon }) => (
+          {navigationGroups.map((group, groupIndex) => <div className="nav-group" key={group.label}><span className="nav-group__label"><span>{String(groupIndex + 1).padStart(2, '0')} /</span> {group.label}</span>{group.items.map(({ to, label, icon: Icon }, itemIndex) => (
               <NavLink key={to} to={to} end={to === '/'} className={({ isActive }) => `nav-item ${isActive ? 'nav-item--active' : ''}`} title={label}>
-                <Icon size={19} weight="regular" aria-hidden="true" /><span>{label}</span>
+                <span className="nav-item__index" aria-hidden="true">{String(itemIndex + 1).padStart(2, '0')}</span><Icon size={18} weight="regular" aria-hidden="true" /><span>{label}</span>
               </NavLink>
             ))}</div>)}
         </nav>
-        <div className="sidebar__footer"><Archive size={18} /><span>Veriler bu bilgisayarda</span></div>
+        <div className="sidebar__footer"><Archive size={18} /><span>YEREL VERİ / AKTİF</span></div>
       </aside>
       <div className="workspace">
         <header className="toolbar">
-          <span className="toolbar__context">{current}</span>
+          <div className="toolbar__identity"><span className="toolbar__eyebrow">KŞ / OPERASYON PANELİ</span><span className="toolbar__context">{current}</span></div>
           <div className="toolbar__actions">
             <button className="search-trigger" onClick={() => setSearchOpen(true)}><MagnifyingGlass size={18} /><span>Ara</span><kbd>Ctrl K</kbd></button>
             <Button variant="primary" onClick={onQuickPurchase}><Plus size={18} />Yeni satın alma</Button>

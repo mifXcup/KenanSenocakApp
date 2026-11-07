@@ -348,7 +348,7 @@ def refresh_balances(session: Session, period: PayrollPeriod) -> None:
 def post_ledger_on_finalize(
     session: Session, period: PayrollPeriod, entries: list[PayrollEntry], due: date | None
 ) -> None:
-    # Vade: istekte açık tarih > personel maaş günü istisnası > şirket varsayılanı > dönem bitişi.
+    # Vade: şirketin sabit ödeme günü (ayın 10'u).
     attendance = load_attendance_settings(session)
     people = {
         e.id: e
@@ -358,7 +358,7 @@ def post_ledger_on_finalize(
     }
     for entry in entries:
         if entry.net_due_kurus > 0:
-            entry_due = due or salary_due_date(
+            entry_due = salary_due_date(
                 people.get(entry.employee_id), period.period_end, attendance
             )
             session.add(

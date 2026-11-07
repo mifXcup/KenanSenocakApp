@@ -24,6 +24,10 @@ function AppContent() {
   const closePurchase = useCallback(() => setPurchaseOpen(false), [])
 
   useEffect(() => window.ksDesktop?.app.onNavigate((route) => navigate(route)), [navigate])
+  // Pencere yeni açılırken gelen yönlendirme (bildirim, mini bar) sayfa hazır olunca bir kez alınır.
+  useEffect(() => {
+    void window.ksDesktop?.app.takePendingRoute?.().then((route) => { if (route) navigate(route) })
+  }, [navigate])
 
   if (location.pathname === '/mini-bar') return <MiniProjectBar />
 

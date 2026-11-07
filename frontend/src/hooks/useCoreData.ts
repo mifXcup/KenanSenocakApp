@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { apiRequest } from '../lib/api'
+import { apiList } from '../lib/api'
 import type { Material, Payment, Project, Purchase, Supplier } from '../lib/types'
 
 export const queryKeys = {
@@ -8,25 +8,17 @@ export const queryKeys = {
   projects: ['projects'] as const,
   purchases: ['purchases'] as const,
   payments: ['payments'] as const,
-  reports: ['reports'] as const,
   backupStatus: ['backup-status'] as const,
   backups: ['backups'] as const,
-  customers: ['customers'] as const,
-  customer: (id: string) => ['customers', id] as const,
-  customerStatement: (id: string) => ['customers', id, 'statement'] as const,
   profitability: (projectId: string) => ['projects', projectId, 'profitability'] as const,
-  projectBudget: (projectId: string) => ['projects', projectId, 'budget-lines'] as const,
-  calendar: (range: string) => ['calendar', range] as const,
-  today: ['today'] as const,
-  leaveRequests: (range: string) => ['leave-requests', range] as const,
   payrollPeriods: ['payroll-periods'] as const,
 }
 
 export function useCoreData() {
-  const suppliers = useQuery({ queryKey: queryKeys.suppliers, queryFn: () => apiRequest<Supplier[]>('/api/v1/suppliers') })
-  const materials = useQuery({ queryKey: queryKeys.materials, queryFn: () => apiRequest<Material[]>('/api/v1/materials') })
-  const projects = useQuery({ queryKey: queryKeys.projects, queryFn: () => apiRequest<Project[]>('/api/v1/projects') })
-  const purchases = useQuery({ queryKey: queryKeys.purchases, queryFn: () => apiRequest<Purchase[]>('/api/v1/purchases') })
-  const payments = useQuery({ queryKey: queryKeys.payments, queryFn: () => apiRequest<Payment[]>('/api/v1/payments') })
+  const suppliers = useQuery({ queryKey: queryKeys.suppliers, queryFn: () => apiList<Supplier>('/api/v1/suppliers') })
+  const materials = useQuery({ queryKey: queryKeys.materials, queryFn: () => apiList<Material>('/api/v1/materials') })
+  const projects = useQuery({ queryKey: queryKeys.projects, queryFn: () => apiList<Project>('/api/v1/projects') })
+  const purchases = useQuery({ queryKey: queryKeys.purchases, queryFn: () => apiList<Purchase>('/api/v1/purchases') })
+  const payments = useQuery({ queryKey: queryKeys.payments, queryFn: () => apiList<Payment>('/api/v1/payments') })
   return { suppliers, materials, projects, purchases, payments }
 }

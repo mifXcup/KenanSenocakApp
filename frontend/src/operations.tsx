@@ -3,7 +3,7 @@ import { useSearchParams } from 'react-router-dom'
 import { PersonnelExtras } from './personnelExtras'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { CalendarCheck, ClockCounterClockwise, Coins, HardHat, Plus, UserPlus, UsersThree } from '@phosphor-icons/react'
-import { apiRequest, formatDate, formatMoney, toKurus } from './lib/api'
+import { apiList, apiRequest, formatDate, formatMoney, toKurus } from './lib/api'
 import type { Employee, EmployeePayment, Project, Site, WorkLog } from './lib/types'
 import { Button, EmptyState, ErrorState, Field, LoadingRows, PageHeader, SelectInput, SideSheet, TextInput } from './components/ui'
 import './operations.css'
@@ -21,7 +21,7 @@ const operationKeys = {
 }
 
 const wageTypeLabel = { monthly: 'Aylık', daily: 'Günlük', hourly: 'Saatlik' } as const
-const workStatusLabel = { worked: 'Çalıştı', half_day: 'Yarım gün', overtime: 'Fazla mesai', paid_leave: 'Ücretli izin', unpaid_leave: 'Ücretsiz izin', absent: 'Devamsız' } as const
+const workStatusLabel = { worked: 'Çalıştı', half_day: 'Yarım gün', overtime: 'Fazla mesai', paid_leave: 'Ücretli izin', unpaid_leave: 'Ücretsiz izin', absent: 'Habersiz gelmedi', notified_absent: 'Haber vererek gelmedi' } as const
 
 type WageType = keyof typeof wageTypeLabel
 type WorkStatus = keyof typeof workStatusLabel
@@ -49,16 +49,19 @@ export function PersonnelPage() {
   const [searchParams] = useSearchParams()
   const client = useQueryClient()
   const [sheet, setSheet] = useState<SheetKind>(null)
-  const [selectedEmployeeId, setSelectedEmployeeId] = useState(searchParams.get('employee') || '')
-  const employees = useQuery({ queryKey: operationKeys.employees, queryFn: () => apiRequest<Employee[]>('/api/v1/employees') })
-  const sites = useQuery({ queryKey: operationKeys.sites, queryFn: () => apiRequest<Site[]>('/api/v1/sites') })
-  const workLogs = useQuery({ queryKey: operationKeys.workLogs, queryFn: () => apiRequest<DetailedWorkLog[]>('/api/v1/work-logs') })
-  const payments = useQuery({ queryKey: operationKeys.employeePayments, queryFn: () => apiRequest<EmployeePayment[]>('/api/v1/employee-payments') })
-  const projects = useQuery({ queryKey: operationKeys.projects, queryFn: () => apiRequest<Project[]>('/api/v1/projects') })
+  const requestedEmployee = searchParams.get('employee')
+  const [selectedEmployeeId, setSelectedEmployeeId] = useState(requestedEmployee || '')
+  const [seen_requestedEmployee, setSeen_requestedEmployee] = useState(requestedEmployee)
+  if (requestedEmployee !== seen_requestedEmployee) { setSeen_requestedEmployee(requestedEmployee); if (requestedEmployee) setSelectedEmployeeId(requestedEmployee) }
+  const employees = useQuery({ queryKey: operationKeys.employees, queryFn: () => apiList<Employee>('/api/v1/employees') })
+  const sites = useQuery({ queryKey: operationKeys.sites, queryFn: () => apiList<Site>('/api/v1/sites') })
+  const workLogs = useQuery({ queryKey: operationKeys.workLogs, queryFn: () => apiList<DetailedWorkLog>('/api/v1/work-logs') })
+  const payments = useQuery({ queryKey: operationKeys.employeePayments, queryFn: () => apiList<EmployeePayment>('/api/v1/employee-payments') })
+  const projects = useQuery({ queryKey: operationKeys.projects, queryFn: () => apiList<Project>('/api/v1/projects') })
   const selectedEmployee = employees.data?.find((item) => item.id === selectedEmployeeId) ?? null
   const wageRates = useQuery({
     queryKey: ['employee-wage-rates', selectedEmployeeId],
-    queryFn: () => apiRequest<WageRate[]>(`/api/v1/employees/${selectedEmployeeId}/wage-rates`),
+    queryFn: () => apiList<WageRate>(`/api/v1/employees/${selectedEmployeeId}/wage-rates`),
     enabled: Boolean(selectedEmployeeId),
   })
 
@@ -171,7 +174,7 @@ function SiteSheet({ open, onClose, onSaved, projects }: { open: boolean; onClos
 
 function WorkSheet({ open, onClose, onSaved, employees, sites, projects }: { open: boolean; onClose: () => void; onSaved: () => void; employees: Employee[]; sites: Site[]; projects: Project[] }) {
   const [employeeId, setEmployeeId] = useState(''); const [siteId, setSiteId] = useState(''); const [projectId, setProjectId] = useState(''); const [date, setDate] = useState(todayIso); const [workStatus, setWorkStatus] = useState<WorkStatus>('worked'); const [normalHours, setNormalHours] = useState(''); const [overtimeHours, setOvertimeHours] = useState(''); const [amount, setAmount] = useState(''); const [note, setNote] = useState('')
-  const hasNoHours = workStatus === 'unpaid_leave' || workStatus === 'absent'
+  const hasNoHours = workStatus === 'unpaid_leave' || workStatus === 'absent' || workStatus === 'notified_absent'
   const mutation = useMutation({ mutationFn: () => apiRequest<DetailedWorkLog>('/api/v1/work-logs', { method: 'POST', body: { employee_id: employeeId, site_id: siteId || null, project_id: projectId || null, work_date: date, work_status: workStatus, normal_hours: hasNoHours || !normalHours ? null : Number(normalHours.replace(',', '.')), overtime_hours: hasNoHours || !overtimeHours ? 0 : Number(overtimeHours.replace(',', '.')), manual_amount_kurus: amount ? toKurus(amount) : null, note: note || null } }), onSuccess: () => { onSaved(); onClose(); setAmount(''); setNote(''); setNormalHours(''); setOvertimeHours(''); setWorkStatus('worked') } })
   return <SideSheet title="Çalışma kaydı" description="Çalışma, izin ve fazla mesai durumunu günlük olarak kaydedin." open={open} onClose={onClose} footer={<><Button onClick={onClose}>Vazgeç</Button><Button variant="primary" loading={mutation.isPending} disabled={!employeeId || !date} onClick={() => mutation.mutate()}>Kaydet</Button></>}><div className="form-stack"><Field label="Personel"><SelectInput value={employeeId} onChange={(e) => setEmployeeId(e.target.value)} autoFocus><option value="">Personel seçin</option>{employees.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</SelectInput></Field><div className="form-grid"><Field label="Tarih"><TextInput type="date" value={date} onChange={(e) => setDate(e.target.value)} /></Field><Field label="Gün durumu"><SelectInput value={workStatus} onChange={(e) => setWorkStatus(e.target.value as WorkStatus)}>{Object.entries(workStatusLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</SelectInput></Field></div><div className="form-grid"><Field label="Normal saat" hint={hasNoHours ? 'Bu durumda saat girilmez' : 'Boşsa standart gün süresi kullanılır'}><TextInput inputMode="decimal" value={normalHours} onChange={(e) => setNormalHours(e.target.value)} placeholder="Otomatik" disabled={hasNoHours} /></Field><Field label="Fazla mesai saati" hint="Fazla mesai durumunda girin"><TextInput inputMode="decimal" value={overtimeHours} onChange={(e) => setOvertimeHours(e.target.value)} placeholder="0" disabled={hasNoHours} /></Field></div><Field label="Proje" hint="İsteğe bağlı"><SelectInput value={projectId} onChange={(e) => setProjectId(e.target.value)}><option value="">Genel çalışma</option>{projects.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</SelectInput></Field><Field label="Şantiye" hint="İsteğe bağlı"><SelectInput value={siteId} onChange={(e) => setSiteId(e.target.value)}><option value="">Şantiye seçilmedi</option>{sites.filter((item) => !projectId || !item.project_id || item.project_id === projectId).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</SelectInput></Field><Field label="Manuel işçilik tutarı" hint="Boşsa ücret geçmişi ve saatlere göre hesaplanır"><TextInput inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="Otomatik hesapla" disabled={hasNoHours} /></Field><Field label="Not" hint="İsteğe bağlı"><textarea className="input textarea" value={note} onChange={(e) => setNote(e.target.value)} /></Field>{mutation.error && <span className="form-error">{mutation.error.message}</span>}</div></SideSheet>
 }

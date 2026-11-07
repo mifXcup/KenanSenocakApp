@@ -25,7 +25,7 @@ ALL_REPORTS = [
     "project-profitability", "budget-variance", "project-comparison", "customer-aging", "supplier-aging",
     "customer-advances", "cash-forecast-13w", "upcoming-schedule", "staff-balances",
     "attendance-overtime-leave", "labor-cost", "material-price-history", "waste-rework-cost",
-    "purchase-lifecycle",
+    "purchase-lifecycle", "material-usage",
 ]
 
 
@@ -368,3 +368,28 @@ def test_report_validation_and_pagination(client, portfolio):
     full = report(client, "supplier-aging")
     page = client.get(f"{REPORTS}/supplier-aging", params={"limit": 1, "offset": 0}).json()
     assert len(page["rows"]) == 1 and page["totals"] == full["totals"]  # toplamlar tüm satırlardan
+
+
+def test_material_usage_report_groups_by_project_material_and_unit(client):
+    project = make_project(client, name="Kullanım Projesi")
+    material = client.post("/api/v1/materials", json={"name": "MDF", "default_unit": "levha", "tracking_mode": "exact"}).json()
+    supplier = client.post("/api/v1/suppliers", json={"name": "Levha Tedarik"}).json()
+    bought = client.post("/api/v1/purchases", json={
+        "supplier_id": supplier["id"], "material_id": material["id"], "project_id": project["id"],
+        "purchase_date": "2026-03-04", "quantity": "10", "unit": "levha", "unit_price_kurus": 100_000,
+        "idempotency_key": "usage-report-purchase",
+    })
+    assert bought.status_code == 201, bought.text  # teslim alınan alış, malzeme hareketini otomatik üretir
+    base = {"material_id": material["id"], "project_id": project["id"], "movement_date": "2026-03-05", "confidence": "exact", "unit": "levha"}
+    for kind, quantity in (("use", "6"), ("waste", "1"), ("return", "0.5")):
+        extra = {"amount_kurus": 25_000} if kind == "waste" else {}
+        assert client.post("/api/v1/material-movements", json={**base, "movement_type": kind, "quantity": quantity, **extra}).status_code == 201
+    other_unit = {**base, "unit": "kg", "movement_type": "use", "quantity": "3"}
+    assert client.post("/api/v1/material-movements", json=other_unit).status_code == 201
+
+    body = report(client, "material-usage", project_id=project["id"])
+    rows = {row["unit"]: row for row in body["rows"]}
+    levha = rows["levha"]
+    assert (levha["purchased"], levha["used"], levha["waste"], levha["returned"]) == (10.0, 6.0, 1.0, 0.5)
+    assert levha["net"] == 3.5 and levha["waste_cost_kurus"] == 25_000
+    assert rows["kg"]["used"] == 3.0 and rows["kg"]["net"] == -3.0

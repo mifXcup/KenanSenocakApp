@@ -25,8 +25,7 @@ from .customers import (
     customer_buckets,
     customer_statement,
 )
-from .database import get_session
-from .exports import Column, ReportTable, pdf_response, xlsx_response
+from .exports import Column, ReportTable
 from .finance import compute_positions, summarize
 from .models import (
     Customer,
@@ -47,11 +46,13 @@ from .models import (
 )
 from .project_finance import compute_profitability
 from .receipts import quantity_warnings
+from .report_base import build_report as shared_build_report
+from .report_base import register_report_routes
 from .reports import AGING_LABELS, debt_aging
 from .supplier_ledger import supplier_statement
+from .textnorm import match_key
 
 router = APIRouter(prefix="/api/v1/reports/finance", dependencies=[Depends(require_sidecar_token)])
-MAX_EXPORT_ROWS = 20000
 WEEKS = 13
 
 CATEGORY_LABELS = {
@@ -806,7 +807,7 @@ def report_material_price_history(session: Session, f: Filters) -> ReportTable:
             unit_price = int((Decimal(receipt.amount_kurus) / quantity).quantize(Decimal(1)))
         else:
             unit_price = purchase.unit_price_kurus
-        key = (purchase.material_id, (purchase.unit or "").strip().casefold() or None)
+        key = (purchase.material_id, match_key(purchase.unit or "") or None)
         previous = last.get(key)
         change = round((unit_price - previous) / previous * 100, 2) if unit_price and previous else None
         if unit_price:
@@ -943,6 +944,70 @@ def purchase_lifecycle_table(session: Session, f: Filters | None = None) -> Repo
     )
 
 
+def report_material_usage(session: Session, f: Filters) -> ReportTable:
+    """Hangi malzeme hangi projede ne kadar alındı, kullanıldı, fire oldu (miktar bazlı)."""
+    query = select(MaterialMovement).where(MaterialMovement.status == RecordStatus.ACTIVE)
+    if f.project_id:
+        query = query.where(MaterialMovement.project_id == f.project_id)
+    if f.material_id:
+        query = query.where(MaterialMovement.material_id == f.material_id)
+    if f.date_from:
+        query = query.where(MaterialMovement.movement_date >= f.date_from)
+    if f.date_to:
+        query = query.where(MaterialMovement.movement_date <= f.date_to)
+    movements = list(session.scalars(query))
+    projects = names(session, Project, {m.project_id for m in movements if m.project_id})
+    materials = names(session, Material, {m.material_id for m in movements})
+    groups: dict[tuple, dict] = {}
+    for m in movements:
+        unit = (m.unit or "").strip()
+        key = (m.project_id, m.material_id, match_key(unit))
+        row = groups.setdefault(
+            key,
+            {
+                "project_name": projects.get(m.project_id) if m.project_id else "Projesiz",
+                "material_name": materials.get(m.material_id), "unit": unit or None,
+                "purchased": Decimal(0), "used": Decimal(0), "waste": Decimal(0), "returned": Decimal(0),
+                "adjusted": Decimal(0), "waste_cost_kurus": 0, "untracked": 0,
+            },
+        )
+        quantity = m.quantity
+        if quantity is None:
+            row["untracked"] += 1  # miktarsız (yalnız tutar) kayıt miktar sütunlarına girmez
+            if m.movement_type == MovementType.WASTE and m.amount_kurus:
+                row["waste_cost_kurus"] += m.amount_kurus
+            continue
+        slot = {
+            MovementType.PURCHASE: "purchased", MovementType.USE: "used", MovementType.WASTE: "waste",
+            MovementType.RETURN: "returned", MovementType.ADJUSTMENT: "adjusted",
+        }[m.movement_type]
+        row[slot] += quantity
+        if m.movement_type == MovementType.WASTE and m.amount_kurus:
+            row["waste_cost_kurus"] += m.amount_kurus
+    rows = []
+    for row in groups.values():
+        net = row["purchased"] + row["returned"] + row["adjusted"] - row["used"] - row["waste"]
+        rows.append({**{k: (float(v) if isinstance(v, Decimal) else v) for k, v in row.items()}, "net": float(net)})
+    rows.sort(key=lambda r: (r["project_name"] or "", r["material_name"] or "", r["unit"] or ""))
+    columns = [
+        Column("project_name", "Proje"), Column("material_name", "Malzeme"), Column("unit", "Birim"),
+        Column("purchased", "Alınan", "number"), Column("used", "Kullanılan", "number"),
+        Column("waste", "Fire", "number"), Column("returned", "İade", "number"),
+        Column("adjusted", "Sayım düzeltmesi", "number"), Column("net", "Kayıtlara göre kalan", "number"),
+        Column("waste_cost_kurus", "Fire maliyeti", "money"),
+    ]
+    return ReportTable(
+        "material-usage", "Malzeme Kullanımı (Projeye Göre)", columns, rows, {}, f.as_dict(),
+        notes=[
+            (
+                "Miktarlar kayıtlı hareketlerden gelir; kesin stok sayımı değildir. 'Kayıtlara göre kalan' "
+                "eksiye düşerse kullanım veya sayım kaydı eksik olabilir."
+            ),
+            "Farklı birimdeki hareketler (örn. kg ve adet) ayrı satırlarda gösterilir, toplanmaz.",
+        ],
+    )
+
+
 BUILDERS = {
     "project-profitability": report_project_profitability,
     "budget-variance": report_budget_variance,
@@ -959,49 +1024,13 @@ BUILDERS = {
     "labor-cost": report_labor_cost,
     "material-price-history": report_material_price_history,
     "waste-rework-cost": report_waste_rework,
+    "material-usage": report_material_usage,
     "purchase-lifecycle": report_purchase_lifecycle,
 }
 
 
 def build_report(session: Session, name: str, f: Filters) -> ReportTable:
-    builder = BUILDERS.get(name)
-    if builder is None:
-        raise ApiError("not_found", "Rapor bulunamadı.", 404, {"available": sorted(BUILDERS)})
-    return builder(session, f)
+    return shared_build_report(BUILDERS, session, name, f)
 
 
-@router.get("")
-def list_reports():
-    return [{"name": name} for name in sorted(BUILDERS)]
-
-
-@router.get("/{name}")
-def json_report(
-    name: str,
-    filters: Filters = Depends(get_filters),
-    limit: int = Query(500, ge=1, le=2000),
-    offset: int = Query(0, ge=0),
-    session: Session = Depends(get_session),
-):
-    table = build_report(session, name, filters)
-    body = table.to_json()
-    body["limit"], body["offset"] = limit, offset
-    body["rows"] = table.rows[offset : offset + limit]  # toplamlar tüm satırlardan hesaplanır
-    return body
-
-
-def _export_table(session: Session, name: str, filters: Filters) -> ReportTable:
-    table = build_report(session, name, filters)
-    if len(table.rows) > MAX_EXPORT_ROWS:
-        raise ApiError("too_many_rows", f"Dosya çıktısı en fazla {MAX_EXPORT_ROWS} satır içerir.", 422)
-    return table
-
-
-@router.get("/{name}/export.xlsx")
-def xlsx_report(name: str, filters: Filters = Depends(get_filters), session: Session = Depends(get_session)):
-    return xlsx_response(_export_table(session, name, filters), f"rapor-{name}.xlsx")
-
-
-@router.get("/{name}/export.pdf")
-def pdf_report(name: str, filters: Filters = Depends(get_filters), session: Session = Depends(get_session)):
-    return pdf_response(_export_table(session, name, filters), f"rapor-{name}.pdf")
+register_report_routes(router, BUILDERS, get_filters)

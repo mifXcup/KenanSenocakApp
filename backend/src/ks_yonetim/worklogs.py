@@ -31,6 +31,7 @@ from .models import (
     AppSetting,
     Employee,
     Project,
+    PublicHoliday,
     RecordStatus,
     Site,
     WorkLog,
@@ -85,6 +86,15 @@ STATUS_ALIASES = {
 MAX_IMPORT_ISSUES = 200
 
 
+def is_special_day(session: Session, work_date: date) -> bool:
+    return work_date.weekday() == 6 or session.scalar(
+        select(PublicHoliday.id).where(
+            PublicHoliday.holiday_date == work_date,
+            PublicHoliday.status == RecordStatus.ACTIVE,
+        )
+    ) is not None
+
+
 def resolve_work_log_values(
     employee: Employee,
     work_date: date,
@@ -94,6 +104,7 @@ def resolve_work_log_values(
     manual_amount: int | None,
     settings: LaborSettings,
     book: RateBook,
+    special_day: bool = False,
 ) -> dict:
     """Saat, hesaplanan/manuel ve etkin tutarı üretir; hatada ApiError fırlatır."""
     try:
@@ -113,7 +124,7 @@ def resolve_work_log_values(
         rate = book.at(employee.id, work_date)
         calculated = (
             work_log_amount(
-                status, rate.rate_kurus, rate.wage_type, work_date, normal, overtime, settings
+                status, rate.rate_kurus, rate.wage_type, work_date, normal, overtime, settings, special_day
             )
             if rate
             else None
@@ -202,6 +213,7 @@ def create_work_log(payload: WorkLogCreate, session: Session = Depends(get_sessi
         payload.manual_amount_kurus,
         load_settings(session),
         load_rate_book(session, [employee.id]),
+        is_special_day(session, payload.work_date),
     )
     work_log = WorkLog(
         employee_id=employee.id,
@@ -296,6 +308,7 @@ def update_work_log(
         manual,
         load_settings(session),
         load_rate_book(session, [employee.id]),
+        is_special_day(session, work_date),
     )
     before = {
         "work_date": work_log.work_date,
@@ -357,6 +370,8 @@ def update_payroll_settings(
     payload: LaborSettingsUpdate, session: Session = Depends(get_session)
 ) -> LaborSettingsRead:
     changes = payload.model_dump(exclude_unset=True)
+    if any(changes.get(key, value) != value for key, value in SETTING_DEFAULTS.items()):
+        raise ApiError("fixed_payroll_rule", "Maaş hesabında 9 saatlik gün ve %150 mesai oranı sabittir.", 422)
     before = load_settings(session).as_dict()
     for key, item in changes.items():
         if key not in SETTING_DEFAULTS:
@@ -493,7 +508,8 @@ def parse_work_log_import(session: Session, payload: SpreadsheetFilePayload) -> 
                 raise ValueError("Tarih kesinleşmiş bir maaş dönemine ait.")
             try:
                 values = resolve_work_log_values(
-                    employee, work_date, status, normal, overtime, manual, settings, book
+                    employee, work_date, status, normal, overtime, manual, settings, book,
+                    is_special_day(session, work_date),
                 )
             except ApiError as exc:
                 raise ValueError(exc.message) from exc
